@@ -1,9 +1,176 @@
-<!-- BEGIN:nextjs-agent-rules -->
+# AGENTS.md
 
-# This is NOT the Next.js you know
+> このファイルはClaude Code（実装担当）とCodex（レビュー担当）が本プロジェクトで一貫した判断を行うための運用ルールです。
+> 要件・設計の詳細は重複記載せず、各ドキュメントを正として参照します。
 
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+---
 
-This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+## 1. 参照ドキュメント（正となる情報源）
 
-<!-- END:nextjs-agent-rules -->
+- 要件定義書: `requirements.md`
+- 設計書: `design.md`
+- 実装計画書: `implementation-plan.md`
+
+このAGENTS.mdと上記ドキュメントの内容が矛盾する場合は、**上記3ドキュメントの記述を優先**し、AGENTS.mdを速やかに修正すること。AGENTS.mdは「詳細仕様」ではなく「開発運用ルール」のみを扱う。
+
+3ドキュメント同士で矛盾を見つけた場合は次の優先順位に従う。
+
+- 「何を作るか」で矛盾した場合：`requirements.md` を正とする
+- 「どう実現するか」で矛盾した場合：`design.md` を正とする（design.md自身が「本書が正式な設計書」と明記している）
+- 着手順序・担当区分は `implementation-plan.md` を正とする
+- どちらとも判断がつかない矛盾に気づいた場合は、自己判断で選ばず実装を止めて人間に確認する
+
+---
+
+## 2. プロジェクトの目的（要約）
+
+契約中のサブスクを一元管理し、請求日前にメール通知し、データをいつでも自分の手元に持ち出せる、広告・アップセルのない個人専用アプリ。詳細は `requirements.md` 参照。
+
+**開発者は個人開発者本人。最短でMVPをリリースし、実ユーザー（自分自身）からのフィードバックで改善するサイクルを最優先とする。** 過剰な抽象化・将来を見越した拡張性への投資は避け、`implementation-plan.md` のスコープに忠実に実装する。
+
+---
+
+## 3. 開発体制とエージェントの役割
+
+| エージェント | 役割 |
+|---|---|
+| Claude Code | `implementation-plan.md` のタスク（T0-1〜T10-1）を上から順に実装する |
+| Codex | PR作成後、GitHub連携（Automatic reviews）により、9章・10章の観点に基づき自動でPRをレビューする |
+
+人間（開発者本人）は `implementation-plan.md` の👤／🤝マーカーが付いたタスク、外部サービスの設定・実機確認、および3文書間の矛盾判断を担当する。タスクの粒度・依存関係・👤🤝🤖マーカーの意味は `implementation-plan.md` の記法をそのまま使い、新しい記法を追加しない。
+
+> Codex（CLI）は `AGENTS.md` をリポジトリ直下から自動的に読み込む。Claude Code（CLI）は既定で `CLAUDE.md` を読むため、`CLAUDE.md` の先頭に `@AGENTS.md` を追記してインポートするか、`CLAUDE.md` を本ファイルへのシンボリックリンクにすること。
+
+---
+
+## 4. リポジトリ・ブランチ運用
+
+- GitHubにリポジトリを作成し、バックアップ・履歴管理のためにリモートへpushする
+- `main`: 本番用のリリースライン。**開発中は直接コミット・直接push・直接マージを絶対禁止**する
+- `develop`: 開発用の統合ブランチ。すべての機能ブランチはここから分岐し、レビュー後にここへマージする
+- 機能ブランチ: `feature/{機能名}` 形式で `develop` から分岐する（例: `feature/auth`, `feature/dashboard`）。1タスク＝1ブランチを基本とする
+- ブランチのマージはPRを介して行う（10章のコードレビューを通過したもののみ）。マージ先は `develop` とし、最終判断は人間が行う
+- `develop` → `main` のマージは、`requirements.md` 9章のリリース判断基準を満たした時点（`implementation-plan.md` Phase 8完了時点）でのみ行う。それまで `main` は初期状態のまま据え置き、`develop` が実質的な作業ブランチとなる
+
+---
+
+## 5. 連携フロー
+
+1. Claude Codeが `develop` から機能ブランチ（`feature/{機能名}`）を切り、1つのタスクを実装してコミットする（複数コミットに分けてよい）
+2. **そのタスクが完了するたびに**、Claude Codeが機能ブランチをpushし、`develop` 宛にPRを自動作成する（複数タスクをまとめてpush・PR作成しない）
+3. PRが作成されると、Codexのデスクトップアプリ経由のGitHub連携（Automatic reviews）が自動でPRをレビューする
+4. 指摘があれば、Claude Codeがその内容を元に修正コミットを追加してpushし、`gh pr comment` コマンドでPRに `@codex review` とコメントして再レビューを依頼する。指摘が無くなるまで自動で繰り返す（上限3回。超過時は人間にエスカレーションする）
+5. 指摘が無くなったら人間が最終確認し、`develop` にマージする
+
+> Codexの自動レビューはPRを新規作成した時のみ自動でトリガーされ、修正コミットをpushしただけでは自動的には再レビューされない。そのため4のステップでは、pushの都度 `gh pr comment` で `@codex review` と明示的にコメントし、再レビューを依頼する必要がある。
+
+---
+
+## 6. 実装を進める上での原則
+
+- **フェーズ順序を守る**: `implementation-plan.md` のフェーズ・依存関係を飛ばして先に着手しない（例: Phase 1のRLSが未完了のままPhase 2のServer Actionsを実装しない）
+- **スコープ外機能に手を出さない**: `requirements.md` 4.2「やらないこと」に該当する実装（インポート機能、カテゴリ分類、自動連携、多通貨対応など）は、実装が簡単でも追加しない
+- **機能追加は判断基準に照らす**: 思いついた改善や機能追加を自己判断で実装しない。`requirements.md` 2章「機能追加の判断基準」の2条件（M-1／M-2の強化になるか、作者が実際に使いたいと感じたか）のどちらも満たさない場合は実装しない
+- **迷ったら設計書を正とする**: 技術的な実現方法で判断に迷った場合は `design.md` の記述に従う。書かれていない場合（例: 具体的なライブラリのバージョン、細かいUIコンポーネントの分割）は、要件を満たす最小実装を選び、選定理由をコミットメッセージに残す。DBスキーマ変更・認証方式の変更など大きな設計判断は自己判断せず人間に確認する
+- **Supabaseは開発中ローカル環境を使う**: 本番のSupabaseプロジェクトに直接繋いで開発しない。開発用のSupabase環境はSupabase CLI（`supabase init`／`supabase start`等）で構築・運用し、Web管理画面の操作やCLI以外の手段での環境構築は行わない
+
+---
+
+## 7. コード規約
+
+- TypeScriptはstrictモードを有効にする
+- any型は絶対に使わないこと
+- ネストしすぎないこと（早期returnなどでフラットに保つ）
+- コメントは日本語可。変数・関数・型名は英語
+- コミットメッセージは `[T{タスクID}] 変更内容の要約` の形式を推奨する（例: `[T2-3] サブスクのServer Actionsを実装`）。タスクIDと実装計画書を対応させ、進捗を追いやすくする
+
+型チェック・Lintの方針は「バランス型」（安全性の最低限は維持しつつ、Lint／型エラーではコミット・マージをブロックしない）。テストは `lib/date.ts`・`lib/billing.ts` のみ単体テストを追加し、それ以外はMVPでは動作確認のみとする（`implementation-plan.md` 前提・方針）。
+
+---
+
+## 8. 使用プラグイン（MCP）
+
+| プラグイン | 用途 | 対応エージェント |
+|---|---|---|
+| Context7 | ライブラリ・フレームワーク（Next.js, Supabase, Resend, Recharts, Zod等）の最新ドキュメント参照（バージョン差異による誤実装を防ぐ） | Claude Code |
+| shadcn/ui MCP | shadcn/ui + Tailwindのコンポーネント・ブロックをレジストリから検索し、自然言語でインストール。フロントエンドUI実装時に使用 | Claude Code |
+
+- 新しいライブラリ・API仕様を扱う実装では、必ずContext7で最新ドキュメントを確認してから実装する（学習データの古い情報での誤実装を防ぐ）
+- フロントエンドのUI実装（コンポーネント追加・レイアウト構築）ではshadcn/ui MCPを優先的に使い、手書きでのコンポーネント自作は最小限にする
+- Codexはレビュー時、上記2点が守られているか（使うべき場面で使わずに実装していないか）も指摘対象に含める
+- Claude Code側のMCP設定は本リポジトリの `.mcp.json` から自動で読み込む（実装フェーズの環境構築タスクで設定する）。CodexはPRレビュー（GitHub連携）専用のため、MCP設定は不要
+
+---
+
+## 9. アーキテクチャ上、常に守るべき制約
+
+以下は `design.md` の設計方針の中でも、実装中に逸脱しやすい重要な制約。Codexは特にこれらの逸脱を重点的にレビューすること。
+
+- `service_role` キーに `NEXT_PUBLIC_` を付けない。全テーブルでRLSを有効化しデフォルト拒否とする（design.md 3章）
+- `/api/cron/daily` は `CRON_SECRET` によるヘッダー検証を必ず行う（design.md 5章）
+- 請求日繰り越し処理は `while (next_billing_date < today)` で冪等に実装し、月末アンカー処理を省略しない（design.md 6章）
+- 通知は `notification_logs` のユニーク制約により二重送信を防ぐ設計から逸脱しない（design.md 6章）
+- 画面からのDB書き込みはServer Actions経由のみとする。REST API層を独自に追加しない（design.md 5章）
+- Server Actionsは例外を投げず `{ success, error }` 形式で返す。クライアントに詳細なエラー内容を返さない（design.md 13章）
+
+---
+
+## 10. コードレビュー
+
+- PRレビューの実施方法・自動修正ループの回数は5章「連携フロー」を参照。判断基準は9章の制約と6章の原則に基づく
+- レビューの優先度: セキュリティ・データ破損に直結する指摘（9章の制約違反）を最優先とし、次いでバリデーション・エラーハンドリング、スコープ逸脱、テスト不足、ディレクトリ構成の逸脱は軽微として扱ってよい
+
+---
+
+## 11. セキュリティ・プライバシー原則
+
+- 自分のデータには自分だけがアクセスできること（RLSを多層防御として必ず有効化する。「サーバー経由だから不要」という判断はしない。design.md 3章／requirements.md N-4）
+- エクスポート機能（JSON/CSV）はこのアプリの存在理由そのものであり、他機能の実装によって欠落・劣化させない（requirements.md 2章・F-7）
+- `SUPABASE_SERVICE_ROLE_KEY`・`CRON_SECRET`・`RESEND_API_KEY` 等の秘密情報をログ・コミット・PRコメントに出力しない
+
+---
+
+## 12. AIに実行してほしくないコマンド・操作
+
+以下は、**アプリのコード（Server Actions／Route Handler）を経由せず、AIが手元で直接実行する操作**を対象とした禁止事項。実装計画書に基づき通常のコードとして書く分には対象外（詳細は各項目の注記を参照）。
+
+**Git関連**
+- `main`ブランチへの直接コミット・直接push・直接マージ（4章「リポジトリ・ブランチ運用」参照。開発中は絶対禁止）
+- `git push --force`（自分の作業中の機能ブランチを取り消す目的を除く。`main`・`develop`には行わない）
+- `git reset --hard`（共有ブランチ上での実行）
+- PRレビューが未通過のまま自己判断で `develop` にマージすること
+- リリース判断基準（`requirements.md` 9章）を満たす前に `develop` → `main` のマージを行うこと
+
+**ファイルシステム関連**
+- `rm -rf` など、確認なしの一括削除（対象がプロジェクトフォルダ外、またはユーザーの意図が不明な場合）
+- OS標準ディレクトリやdotfiles（`~/.ssh`, `~/.zshrc`など）の変更
+
+**データベース関連（Supabase）**
+- ターミナル等から本番Supabaseに対して、アプリのコードを経由せず直接SQLを実行すること（`DELETE`／`DROP`等）
+- `SUPABASE_SERVICE_ROLE_KEY` を用いてRLSをバイパスするアドホックなスクリプトを本番データに対して実行すること
+- ※対象外（問題なし）: マイグレーションSQL、RLSポリシー定義、日次バッチ（`/api/cron/daily`）が`service_role`で実行するコード等、実装計画書に基づき通常のアプリケーションコードとして書く処理
+
+**ネットワーク関連**
+- `design.md` で定めた外部サービス（Supabase, Resend, Vercel）以外への通信を実行時コードに追加すること
+- ※GitHubへの`git push`など、開発フローのための通信はこの禁止事項の対象外
+
+**権限・環境関連**
+- `sudo` を伴うコマンド全般
+- 環境変数・APIキーなど秘密情報をログやコミットに出力する操作
+
+---
+
+## 13. ドキュメント更新ルール
+
+- 実装中に設計・仕様を変更した場合は `design.md` または `implementation-plan.md` を更新すること（AGENTS.mdへの反映は運用ルールに影響する場合のみ）
+- 本書固有の未決定事項（実装をブロックしない軽微な論点）は、以下の表に追記する
+
+| # | 項目 | 論点・推奨 |
+|---|---|---|
+| A-1 | テストフレームワーク | `lib/date.ts`／`lib/billing.ts` のテストに使うツールの指定が3文書にない。推奨: Vitest |
+| A-2 | パッケージマネージャ | 指定なし。推奨: npm |
+| A-3 | Lint／Formatツール | 指定なし。推奨: ESLint + Prettier |
+| A-4 | Node.jsバージョン固定 | 指定なし。推奨: `.nvmrc` でLTS最新版を固定 |
+| A-5 | PRレビュー自動ループの上限回数 | 既定3回で運用開始し、実際の指摘解消状況を見て調整する |
+
+---
