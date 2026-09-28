@@ -1,8 +1,8 @@
-export default function Home() {
+export default function LoginPage() {
   return (
     <div className="flex flex-1 items-center justify-center">
       <p className="text-sm text-muted-foreground">
-        一覧画面は Phase 2 以降で実装予定です。
+        ログイン画面は Phase 1（T1-2）で実装予定です。
       </p>
     </div>
   );
