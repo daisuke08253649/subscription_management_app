@@ -1,8 +1,8 @@
-export default function Home() {
+export default function SignupPage() {
   return (
     <div className="flex flex-1 items-center justify-center">
       <p className="text-sm text-muted-foreground">
-        一覧画面は Phase 2 以降で実装予定です。
+        新規登録画面は Phase 1（T1-2）で実装予定です。
       </p>
     </div>
   );
