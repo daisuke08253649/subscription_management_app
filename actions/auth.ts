@@ -26,6 +26,9 @@ const credentialsSchema = z.object({
 const resetRequestSchema = z.object({ email: emailSchema });
 const updatePasswordSchema = z.object({ password: passwordSchema });
 
+const UNEXPECTED_ERROR_MESSAGE =
+  "エラーが発生しました。時間をおいて再度お試しください";
+
 // design.md 13章: 詳細はconsole.errorでサーバー側のログにのみ残し、
 // ユーザーにはSupabaseのAuthErrorを日本語化した一般的なメッセージのみ返す。
 // 確認できているerror.codeのみ個別メッセージにし、それ以外は汎用メッセージにフォールバックする。
@@ -46,7 +49,29 @@ function toJapaneseAuthError(error: AuthError): string {
     case "over_email_send_rate_limit":
       return "しばらく時間をおいてから再度お試しください";
     default:
-      return "エラーが発生しました。時間をおいて再度お試しください";
+      return UNEXPECTED_ERROR_MESSAGE;
+  }
+}
+
+/**
+ * Supabase Auth呼び出しをtry/catchで包み、{success,error}形式に統一する
+ * （design.md 13章）。想定外の例外（環境変数不備・通信エラー等）でServer Actionが
+ * 例外を投げたままクライアントに伝わってしまうのを防ぐ。
+ * 戻り値がnullなら成功（呼び出し側でredirectする）。redirect()はこの関数の外、
+ * catchに掛からない場所で呼ぶこと。
+ */
+async function callSupabaseAuth(
+  run: () => Promise<{ error: AuthError | null }>,
+): Promise<AuthActionState | null> {
+  try {
+    const { error } = await run();
+    if (error) {
+      return { success: false, error: toJapaneseAuthError(error) };
+    }
+    return null;
+  } catch (error) {
+    console.error("[auth] unexpected error", error);
+    return { success: false, error: UNEXPECTED_ERROR_MESSAGE };
   }
 }
 
@@ -62,10 +87,12 @@ export async function login(
     return { success: false, error: parsed.error.issues[0].message };
   }
 
-  const supabase = await createClient();
-  const { error } = await supabase.auth.signInWithPassword(parsed.data);
-  if (error) {
-    return { success: false, error: toJapaneseAuthError(error) };
+  const failure = await callSupabaseAuth(async () => {
+    const supabase = await createClient();
+    return supabase.auth.signInWithPassword(parsed.data);
+  });
+  if (failure) {
+    return failure;
   }
 
   redirect("/");
@@ -83,10 +110,12 @@ export async function signup(
     return { success: false, error: parsed.error.issues[0].message };
   }
 
-  const supabase = await createClient();
-  const { error } = await supabase.auth.signUp(parsed.data);
-  if (error) {
-    return { success: false, error: toJapaneseAuthError(error) };
+  const failure = await callSupabaseAuth(async () => {
+    const supabase = await createClient();
+    return supabase.auth.signUp(parsed.data);
+  });
+  if (failure) {
+    return failure;
   }
 
   redirect("/");
@@ -103,14 +132,15 @@ export async function requestPasswordReset(
     return { success: false, error: parsed.error.issues[0].message };
   }
 
-  const supabase = await createClient();
   const appUrl = process.env.APP_URL ?? "http://localhost:3000";
-  const { error } = await supabase.auth.resetPasswordForEmail(
-    parsed.data.email,
-    { redirectTo: `${appUrl}/auth/confirm?next=/auth/update-password` },
-  );
-  if (error) {
-    return { success: false, error: toJapaneseAuthError(error) };
+  const failure = await callSupabaseAuth(async () => {
+    const supabase = await createClient();
+    return supabase.auth.resetPasswordForEmail(parsed.data.email, {
+      redirectTo: `${appUrl}/auth/confirm?next=/auth/update-password`,
+    });
+  });
+  if (failure) {
+    return failure;
   }
 
   return { success: true };
@@ -127,19 +157,25 @@ export async function updatePassword(
     return { success: false, error: parsed.error.issues[0].message };
   }
 
-  const supabase = await createClient();
-  const { error } = await supabase.auth.updateUser({
-    password: parsed.data.password,
+  const failure = await callSupabaseAuth(async () => {
+    const supabase = await createClient();
+    return supabase.auth.updateUser({ password: parsed.data.password });
   });
-  if (error) {
-    return { success: false, error: toJapaneseAuthError(error) };
+  if (failure) {
+    return failure;
   }
 
   redirect("/");
 }
 
 export async function logout(): Promise<void> {
-  const supabase = await createClient();
-  await supabase.auth.signOut();
+  const failure = await callSupabaseAuth(async () => {
+    const supabase = await createClient();
+    return supabase.auth.signOut();
+  });
+  if (failure) {
+    redirect("/?error=logout_failed");
+  }
+
   redirect("/auth/login");
 }

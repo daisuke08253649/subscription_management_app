@@ -7,6 +7,14 @@ import { NextResponse, type NextRequest } from "next/server";
  * Supabase公式が必須としているパターン）。
  */
 export async function updateSession(request: NextRequest) {
+  // Route Handler（/api/cron/daily・/api/export/*）は各自の方法で認証を検証する
+  // （CRON_SECRETヘッダー検証・Cookieセッション検証、design.md 5章）。
+  // ここでリダイレクトすると、Cookieを持たないVercel Cronからのリクエストが
+  // /auth/loginへ飛ばされてしまい、日次バッチが動かなくなる
+  if (request.nextUrl.pathname.startsWith("/api")) {
+    return NextResponse.next({ request });
+  }
+
   let supabaseResponse = NextResponse.next({ request });
 
   const supabase = createServerClient(

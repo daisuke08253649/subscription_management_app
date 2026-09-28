@@ -2,7 +2,8 @@ import { logout } from "@/actions/auth";
 import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/server";
 
-export default async function Home() {
+export default async function Home(props: PageProps<"/">) {
+  const searchParams = await props.searchParams;
   const supabase = await createClient();
   const {
     data: { user },
@@ -16,6 +17,11 @@ export default async function Home() {
       <p className="text-sm text-muted-foreground">
         一覧画面は Phase 2 以降で実装予定です。
       </p>
+      {searchParams.error === "logout_failed" ? (
+        <p className="text-sm text-destructive">
+          ログアウトに失敗しました。時間をおいて再度お試しください
+        </p>
+      ) : null}
       <form action={logout}>
         <Button type="submit" variant="outline">
           ログアウト
