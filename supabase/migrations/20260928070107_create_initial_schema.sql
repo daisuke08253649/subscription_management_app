@@ -66,6 +66,30 @@ create table public.subscriptions (
   )
 );
 
+-- card_idが自分自身のcardsを指しているかを検証する。
+-- 単純なFKはcardsの存在確認しかしないため、他ユーザーのcard_idを指定できてしまう。
+-- 複合FK（card_id, user_id）はON DELETE SET NULLがuser_idまで巻き込み必須制約を
+-- 壊すため使えず、代わりにトリガーで検証する
+create function public.check_subscription_card_ownership()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if new.card_id is not null and not exists (
+    select 1 from public.cards c
+    where c.id = new.card_id and c.user_id = new.user_id
+  ) then
+    raise exception 'card_id must belong to the same user as the subscription';
+  end if;
+  return new;
+end;
+$$;
+
+create trigger subscriptions_check_card_ownership
+  before insert or update on public.subscriptions
+  for each row execute procedure public.check_subscription_card_ownership();
+
 create index subscriptions_user_next_billing_date_idx
   on public.subscriptions (user_id, next_billing_date);
 
@@ -127,8 +151,18 @@ create table public.notification_logs (
 );
 
 alter table public.notification_logs enable row level security;
--- 画面から参照する機能が無いため、authenticatedロール向けのポリシーは設定しない
--- （RLS有効化のみでデフォルト拒否。読み書きは日次バッチのservice_roleのみが行う）
+
+-- 書き込みは日次バッチ（service_role）のみが行う。画面からは参照のみ
+-- （requirements.md F-7「全データ・全項目」のエクスポートが将来notification_logsも
+-- 対象にできるよう、所有者限定の読み取りだけは許可しておく。AGENTS.md 9章）
+create policy "notification_logs_select_own" on public.notification_logs
+  for select using (
+    exists (
+      select 1 from public.subscriptions s
+      where s.id = notification_logs.subscription_id
+        and s.user_id = auth.uid()
+    )
+  );
 
 -- ============================================================
 -- settings
