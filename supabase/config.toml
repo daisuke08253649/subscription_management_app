@@ -247,6 +247,13 @@ otp_expiry = 3600
 # subject = "You have been invited"
 # content_path = "./supabase/templates/invite.html"
 
+# パスワード再設定メール。PKCEフロー（app/auth/confirm/route.ts）でtoken_hashを
+# 使うため、デフォルトのConfirmationURLではなくTokenHashを埋め込むテンプレートに差し替える。
+# 本番（Supabaseダッシュボード）でも同内容のテンプレートをT0-4/T8-1で設定すること
+[auth.email.template.recovery]
+subject = "【サブスク管理】パスワードの再設定"
+content_path = "./supabase/templates/recovery.html"
+
 # Uncomment to customize notification email template
 # [auth.email.notification.password_changed]
 # enabled = true

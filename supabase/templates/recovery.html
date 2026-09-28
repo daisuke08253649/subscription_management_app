@@ -1,0 +1,9 @@
+<h2>パスワードの再設定</h2>
+
+<p>パスワード再設定のリクエストを受け付けました。下記のリンクから新しいパスワードを設定してください。</p>
+<p>
+  <a href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=recovery&next=/auth/update-password"
+    >パスワードを再設定する</a
+  >
+</p>
+<p>このリクエストに心当たりがない場合は、このメールを無視してください。</p>

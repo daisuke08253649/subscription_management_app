@@ -1,9 +1,11 @@
-export default function LoginPage() {
-  return (
-    <div className="flex flex-1 items-center justify-center">
-      <p className="text-sm text-muted-foreground">
-        ログイン画面は Phase 1（T1-2）で実装予定です。
-      </p>
-    </div>
-  );
+import { LoginForm } from "@/components/auth/login-form";
+
+export default async function LoginPage(props: PageProps<"/auth/login">) {
+  const searchParams = await props.searchParams;
+  const initialError =
+    searchParams.error === "reset_link_invalid"
+      ? "リンクの有効期限が切れているか、無効です。もう一度パスワード再設定をお試しください"
+      : undefined;
+
+  return <LoginForm initialError={initialError} />;
 }
