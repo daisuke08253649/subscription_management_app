@@ -102,9 +102,11 @@ function billingAnchorDayFrom(nextBillingDate: string): number {
 
 function toSubscriptionError(error: { code?: string; message: string }) {
   console.error("[subscriptions]", error);
-  if (error.code === "P0001") {
-    // 他ユーザーのcard_idを指すトリガー違反（lib/supabase migration参照）。
-    // 通常のUI操作では発生しない想定のため認可エラー扱いにする
+  if (
+    error.code === "P0001" || // 他ユーザーのcard_idを指すトリガー違反
+    error.code === "PGRST116" || // RLSで対象が見えない（他ユーザーの行／存在しないid）
+    error.code === "42501" // RLSのWITH CHECKによる直接の拒否
+  ) {
     return UNAUTHORIZED_ERROR;
   }
   return UNEXPECTED_ERROR;
@@ -214,6 +216,15 @@ export async function updateSubscription(
   if (!idParsed.success) {
     return { success: false, error: UNEXPECTED_ERROR };
   }
+  // フォームを開いた時点のupdated_atを楽観的ロックのトークンとして使う。
+  // モーダルを開いた後に日次バッチが繰り越しを行っていた場合、そのまま更新すると
+  // バッチが進めたnext_billing_dateをフォームの古い値で上書きし、繰り越しを
+  // 巻き戻してしまう（design.md 6章の冪等性を壊す）。そのため値が一致しなければ
+  // 拒否する
+  const expectedUpdatedAt = formData.get("expected_updated_at");
+  if (typeof expectedUpdatedAt !== "string" || expectedUpdatedAt === "") {
+    return { success: false, error: UNEXPECTED_ERROR };
+  }
 
   const parsed = parseSubscriptionFormData(formData);
   if (!parsed.success) {
@@ -239,13 +250,20 @@ export async function updateSubscription(
     // 周期がmonthlyのまま変わっていない場合に限ってのみ保持する
     const { data: current, error: fetchError } = await supabase
       .from("subscriptions")
-      .select("next_billing_date, billing_anchor_day, cycle")
+      .select("next_billing_date, billing_anchor_day, cycle, updated_at")
       .eq("id", idParsed.data)
       .single();
     if (fetchError || !current) {
       return {
         success: false,
         error: toSubscriptionError(fetchError ?? { message: "not found" }),
+      };
+    }
+    if (current.updated_at !== expectedUpdatedAt) {
+      return {
+        success: false,
+        error:
+          "他の操作により内容が更新されています。画面を再読み込みしてください",
       };
     }
 
