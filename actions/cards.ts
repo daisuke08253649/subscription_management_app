@@ -19,6 +19,11 @@ const nameSchema = z
   .min(1, { error: "カード名を入力してください" })
   .max(50, { error: "カード名は50文字以内で入力してください" });
 
+// Server Actionsは直接呼び出せてしまうため、id自体もここで検証する
+// （design.md 12章）。未検証のままPostgresへ渡すと22P02（不正なUUID形式）に
+// なってしまう
+const cardIdSchema = z.uuid({ error: "不正なカードです" });
+
 // design.md 13章: DB制約違反は意味のあるメッセージに変換して返す
 function toCardError(error: { code?: string; message: string }): string {
   console.error("[cards]", error);
@@ -64,6 +69,10 @@ export async function updateCard(
   cardId: string,
   name: string,
 ): Promise<CardActionState> {
+  const idParsed = cardIdSchema.safeParse(cardId);
+  if (!idParsed.success) {
+    return { success: false, error: idParsed.error.issues[0].message };
+  }
   const parsed = nameSchema.safeParse(name);
   if (!parsed.success) {
     return { success: false, error: parsed.error.issues[0].message };
@@ -76,7 +85,7 @@ export async function updateCard(
     const { error } = await supabase
       .from("cards")
       .update({ name: parsed.data })
-      .eq("id", cardId)
+      .eq("id", idParsed.data)
       .select()
       .single();
     if (error) {
@@ -91,12 +100,17 @@ export async function updateCard(
 }
 
 export async function deleteCard(cardId: string): Promise<CardActionState> {
+  const idParsed = cardIdSchema.safeParse(cardId);
+  if (!idParsed.success) {
+    return { success: false, error: idParsed.error.issues[0].message };
+  }
+
   try {
     const supabase = await createClient();
     const { error } = await supabase
       .from("cards")
       .delete()
-      .eq("id", cardId)
+      .eq("id", idParsed.data)
       .select()
       .single();
     if (error) {
