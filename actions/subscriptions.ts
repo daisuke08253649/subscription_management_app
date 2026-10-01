@@ -3,6 +3,15 @@
 import { z } from "zod";
 import { getTodayJST } from "@/lib/date";
 import { createClient } from "@/lib/supabase/server";
+import type { Database } from "@/lib/supabase/database.types";
+
+// supabase gen typesはPostgres関数引数のNULL許容性を生成しない（既知の制限）ため、
+// 実際にはnullを受け付けるのに生成された型はnon-nullになる。生成型の不正確さを
+// 補正するためだけに使う（anyは使わない）
+type CreateSubscriptionArgs =
+  Database["public"]["Functions"]["create_subscription_with_card"]["Args"];
+type UpdateSubscriptionArgs =
+  Database["public"]["Functions"]["update_subscription_with_card"]["Args"];
 
 export interface SubscriptionActionState {
   success: boolean;
@@ -111,50 +120,25 @@ function billingAnchorDayFrom(nextBillingDate: string): number {
 
 function toSubscriptionError(error: { code?: string; message: string }) {
   console.error("[subscriptions]", error);
+  if (error.code === "23505") {
+    // カード名の重複（create_subscription_with_card/update_subscription_with_card
+    // 内でのcards新規作成時）
+    return "同じ名前のカードが既にあります";
+  }
+  if (error.code === "40001") {
+    // update_subscription_with_card内の楽観的ロック不一致（serialization_failure）。
+    // フォームを開いた後に日次バッチ等が対象行を更新していた場合に発生する
+    return "他の操作により内容が更新されています。画面を再読み込みしてください";
+  }
   if (
     error.code === "P0001" || // 他ユーザーのcard_idを指すトリガー違反
-    error.code === "PGRST116" || // RLSで対象が見えない（他ユーザーの行／存在しないid）
+    error.code === "P0002" || // RPC内のSTRICT INTOで対象が見つからない（RLSによる非表示含む）
+    error.code === "PGRST116" || // RLSで対象が見えない（直接テーブル呼び出し時）
     error.code === "42501" // RLSのWITH CHECKによる直接の拒否
   ) {
     return UNAUTHORIZED_ERROR;
   }
   return UNEXPECTED_ERROR;
-}
-
-interface ResolveCardIdResult {
-  cardId: string | null;
-  error?: string;
-}
-
-/**
- * card_id（既存カードを選択）とnew_card_name（その場で新規作成）の
- * どちらが送られてきたかを解決する。両方は通常UIからは送られないが、
- * 直接呼び出された場合はnew_card_nameを優先する
- */
-async function resolveCardId(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  userId: string,
-  cardId: string | undefined,
-  newCardName: string | undefined,
-): Promise<ResolveCardIdResult> {
-  if (!newCardName) {
-    return { cardId: cardId ?? null };
-  }
-
-  const { data: newCard, error } = await supabase
-    .from("cards")
-    .insert({ user_id: userId, name: newCardName })
-    .select("id")
-    .single();
-  if (error || !newCard) {
-    console.error("[subscriptions] card creation failed", error);
-    if (error?.code === "23505") {
-      return { cardId: null, error: "同じ名前のカードが既にあります" };
-    }
-    return { cardId: null, error: UNEXPECTED_ERROR };
-  }
-
-  return { cardId: newCard.id };
 }
 
 export async function createSubscription(
@@ -176,37 +160,24 @@ export async function createSubscription(
       return { success: false, error: UNAUTHORIZED_ERROR };
     }
 
-    const resolvedCard = await resolveCardId(
-      supabase,
-      user.id,
-      input.card_id,
-      input.new_card_name,
-    );
-    if (resolvedCard.error) {
-      return { success: false, error: resolvedCard.error };
-    }
-
-    const { error } = await supabase.from("subscriptions").insert({
-      user_id: user.id,
-      service_name: input.service_name,
-      amount: input.amount,
-      cycle: input.cycle,
-      cycle_days: input.cycle_days ?? null,
-      next_billing_date: input.next_billing_date,
-      billing_anchor_day: billingAnchorDayFrom(input.next_billing_date),
-      is_trial: input.is_trial,
-      card_id: resolvedCard.cardId,
-      cancel_url: input.cancel_url ?? null,
-      memo: input.memo ?? null,
-    });
+    // カード新規作成とサブスク登録をPostgres関数内でまとめて行い、片方だけ
+    // 成功して片方が失敗する状態を起こさない（Codexレビュー指摘対応）。
+    // 関数はsecurity invoker（既定）のままauth.uid()を内部で使うため、RLSは
+    // 引き続き有効（design.md 3章の多層防御）
+    const { error } = await supabase.rpc("create_subscription_with_card", {
+      p_service_name: input.service_name,
+      p_amount: input.amount,
+      p_cycle: input.cycle,
+      p_cycle_days: input.cycle_days ?? null,
+      p_next_billing_date: input.next_billing_date,
+      p_billing_anchor_day: billingAnchorDayFrom(input.next_billing_date),
+      p_is_trial: input.is_trial,
+      p_card_id: input.card_id ?? null,
+      p_new_card_name: input.new_card_name ?? null,
+      p_cancel_url: input.cancel_url ?? null,
+      p_memo: input.memo ?? null,
+    } as CreateSubscriptionArgs);
     if (error) {
-      // card_id・new_card_name共にPostgREST呼び出しは別リクエストのため
-      // 1トランザクションにはならない。新規作成したカードだけが残ってしまうと、
-      // 再送信時に同名カードの重複エラーで原因不明の失敗に見えるため、
-      // 今回新規作成したカードは後始末する
-      if (input.new_card_name && resolvedCard.cardId) {
-        await supabase.from("cards").delete().eq("id", resolvedCard.cardId);
-      }
       return { success: false, error: toSubscriptionError(error) };
     }
 
@@ -250,72 +221,25 @@ export async function updateSubscription(
       return { success: false, error: UNAUTHORIZED_ERROR };
     }
 
-    // billing_anchor_dayは「monthly周期のままnext_billing_dateも変更されていない」
-    // 場合のみ既存の値を保持する。月末で丸められた日付のまま他の項目だけ編集した
-    // ケースで再計算すると、繰り越しの基準日が丸められた値（例: 28）で上書きされ、
-    // 以後の繰り越しが本来の基準（例: 31）に戻らなくなる（design.md 6章の月末問題）。
-    // 一方、weekly/custom_days等からmonthlyへ切り替える場合は、過去の登録時に
-    // 設定されたまま何年も更新されていない無関係なanchorが残っている可能性があるため、
-    // 周期がmonthlyのまま変わっていない場合に限ってのみ保持する
-    const { data: current, error: fetchError } = await supabase
-      .from("subscriptions")
-      .select("next_billing_date, billing_anchor_day, cycle, updated_at")
-      .eq("id", idParsed.data)
-      .single();
-    if (fetchError || !current) {
-      return {
-        success: false,
-        error: toSubscriptionError(fetchError ?? { message: "not found" }),
-      };
-    }
-    if (current.updated_at !== expectedUpdatedAt) {
-      return {
-        success: false,
-        error:
-          "他の操作により内容が更新されています。画面を再読み込みしてください",
-      };
-    }
-
-    const shouldPreserveAnchor =
-      current.cycle === "monthly" &&
-      input.cycle === "monthly" &&
-      input.next_billing_date === current.next_billing_date;
-    const billingAnchorDay = shouldPreserveAnchor
-      ? current.billing_anchor_day
-      : billingAnchorDayFrom(input.next_billing_date);
-
-    const resolvedCard = await resolveCardId(
-      supabase,
-      user.id,
-      input.card_id,
-      input.new_card_name,
-    );
-    if (resolvedCard.error) {
-      return { success: false, error: resolvedCard.error };
-    }
-
-    const { error } = await supabase
-      .from("subscriptions")
-      .update({
-        service_name: input.service_name,
-        amount: input.amount,
-        cycle: input.cycle,
-        cycle_days: input.cycle_days ?? null,
-        next_billing_date: input.next_billing_date,
-        billing_anchor_day: billingAnchorDay,
-        is_trial: input.is_trial,
-        card_id: resolvedCard.cardId,
-        cancel_url: input.cancel_url ?? null,
-        memo: input.memo ?? null,
-      })
-      .eq("id", idParsed.data)
-      .select()
-      .single();
+    // billing_anchor_dayの保持／再計算判定・楽観的ロック（expected_updated_at）の
+    // 検証・カード新規作成はすべてPostgres関数内の1トランザクションで行う
+    // （Codexレビュー指摘対応：読み取りと書き込みを分けるとレースコンディションの
+    // 余地が生まれるため）
+    const { error } = await supabase.rpc("update_subscription_with_card", {
+      p_subscription_id: idParsed.data,
+      p_expected_updated_at: expectedUpdatedAt,
+      p_service_name: input.service_name,
+      p_amount: input.amount,
+      p_cycle: input.cycle,
+      p_cycle_days: input.cycle_days ?? null,
+      p_next_billing_date: input.next_billing_date,
+      p_is_trial: input.is_trial,
+      p_card_id: input.card_id ?? null,
+      p_new_card_name: input.new_card_name ?? null,
+      p_cancel_url: input.cancel_url ?? null,
+      p_memo: input.memo ?? null,
+    } as UpdateSubscriptionArgs);
     if (error) {
-      // createSubscriptionと同様、新規作成したカードだけが残ってしまうのを防ぐ
-      if (input.new_card_name && resolvedCard.cardId) {
-        await supabase.from("cards").delete().eq("id", resolvedCard.cardId);
-      }
       return { success: false, error: toSubscriptionError(error) };
     }
 
