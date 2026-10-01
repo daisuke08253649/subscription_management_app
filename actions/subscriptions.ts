@@ -55,6 +55,13 @@ const subscriptionInputSchema = z
     next_billing_date: z.iso.date({ error: "有効な日付を入力してください" }),
     is_trial: z.boolean(),
     card_id: z.uuid({ error: "不正なカードです" }).optional(),
+    // requirements.md F-1: カードは登録済みのものから選ぶか、その場で新規作成できる
+    new_card_name: z
+      .string()
+      .trim()
+      .min(1, { error: "カード名を入力してください" })
+      .max(50, { error: "カード名は50文字以内で入力してください" })
+      .optional(),
     cancel_url: cancelUrlSchema.optional(),
     memo: z
       .string()
@@ -81,6 +88,7 @@ function parseSubscriptionFormData(formData: FormData) {
     next_billing_date: formData.get("next_billing_date"),
     is_trial: formData.get("is_trial") === "on",
     card_id: emptyToUndefined(formData.get("card_id")),
+    new_card_name: emptyToUndefined(formData.get("new_card_name")),
     cancel_url: emptyToUndefined(formData.get("cancel_url")),
     memo: emptyToUndefined(formData.get("memo")),
   });
@@ -102,6 +110,42 @@ function toSubscriptionError(error: { code?: string; message: string }) {
   return UNEXPECTED_ERROR;
 }
 
+interface ResolveCardIdResult {
+  cardId: string | null;
+  error?: string;
+}
+
+/**
+ * card_id（既存カードを選択）とnew_card_name（その場で新規作成）の
+ * どちらが送られてきたかを解決する。両方は通常UIからは送られないが、
+ * 直接呼び出された場合はnew_card_nameを優先する
+ */
+async function resolveCardId(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+  cardId: string | undefined,
+  newCardName: string | undefined,
+): Promise<ResolveCardIdResult> {
+  if (!newCardName) {
+    return { cardId: cardId ?? null };
+  }
+
+  const { data: newCard, error } = await supabase
+    .from("cards")
+    .insert({ user_id: userId, name: newCardName })
+    .select("id")
+    .single();
+  if (error || !newCard) {
+    console.error("[subscriptions] card creation failed", error);
+    if (error?.code === "23505") {
+      return { cardId: null, error: "同じ名前のカードが既にあります" };
+    }
+    return { cardId: null, error: UNEXPECTED_ERROR };
+  }
+
+  return { cardId: newCard.id };
+}
+
 export async function createSubscription(
   _prevState: SubscriptionActionState,
   formData: FormData,
@@ -121,6 +165,16 @@ export async function createSubscription(
       return { success: false, error: UNAUTHORIZED_ERROR };
     }
 
+    const resolvedCard = await resolveCardId(
+      supabase,
+      user.id,
+      input.card_id,
+      input.new_card_name,
+    );
+    if (resolvedCard.error) {
+      return { success: false, error: resolvedCard.error };
+    }
+
     const { error } = await supabase.from("subscriptions").insert({
       user_id: user.id,
       service_name: input.service_name,
@@ -130,7 +184,7 @@ export async function createSubscription(
       next_billing_date: input.next_billing_date,
       billing_anchor_day: billingAnchorDayFrom(input.next_billing_date),
       is_trial: input.is_trial,
-      card_id: input.card_id ?? null,
+      card_id: resolvedCard.cardId,
       cancel_url: input.cancel_url ?? null,
       memo: input.memo ?? null,
     });
@@ -162,6 +216,12 @@ export async function updateSubscription(
 
   try {
     const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      return { success: false, error: UNAUTHORIZED_ERROR };
+    }
 
     // next_billing_dateが実際に変更された場合のみ、その「日」からbilling_anchor_day
     // を再計算する。変更されていない場合（月末で丸められた日付のまま他の項目だけ
@@ -185,6 +245,16 @@ export async function updateSubscription(
         ? current.billing_anchor_day
         : billingAnchorDayFrom(input.next_billing_date);
 
+    const resolvedCard = await resolveCardId(
+      supabase,
+      user.id,
+      input.card_id,
+      input.new_card_name,
+    );
+    if (resolvedCard.error) {
+      return { success: false, error: resolvedCard.error };
+    }
+
     const { error } = await supabase
       .from("subscriptions")
       .update({
@@ -195,7 +265,7 @@ export async function updateSubscription(
         next_billing_date: input.next_billing_date,
         billing_anchor_day: billingAnchorDay,
         is_trial: input.is_trial,
-        card_id: input.card_id ?? null,
+        card_id: resolvedCard.cardId,
         cancel_url: input.cancel_url ?? null,
         memo: input.memo ?? null,
       })
