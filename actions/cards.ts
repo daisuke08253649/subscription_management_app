@@ -37,22 +37,27 @@ export async function createCard(name: string): Promise<CardActionState> {
     return { success: false, error: parsed.error.issues[0].message };
   }
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return { success: false, error: UNAUTHORIZED_ERROR };
-  }
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      return { success: false, error: UNAUTHORIZED_ERROR };
+    }
 
-  const { error } = await supabase
-    .from("cards")
-    .insert({ user_id: user.id, name: parsed.data });
-  if (error) {
-    return { success: false, error: toCardError(error) };
-  }
+    const { error } = await supabase
+      .from("cards")
+      .insert({ user_id: user.id, name: parsed.data });
+    if (error) {
+      return { success: false, error: toCardError(error) };
+    }
 
-  return { success: true };
+    return { success: true };
+  } catch (error) {
+    console.error("[cards] unexpected error", error);
+    return { success: false, error: UNEXPECTED_ERROR };
+  }
 }
 
 export async function updateCard(
@@ -64,33 +69,43 @@ export async function updateCard(
     return { success: false, error: parsed.error.issues[0].message };
   }
 
-  const supabase = await createClient();
-  // .select().single()を付けないと、RLSで対象0件（他人のcard_idや不正なid）でも
-  // エラーにならず更新できたかのように見えてしまう（PostgRESTの既知の挙動）
-  const { error } = await supabase
-    .from("cards")
-    .update({ name: parsed.data })
-    .eq("id", cardId)
-    .select()
-    .single();
-  if (error) {
-    return { success: false, error: toCardError(error) };
-  }
+  try {
+    const supabase = await createClient();
+    // .select().single()を付けないと、RLSで対象0件（他人のcard_idや不正なid）でも
+    // エラーにならず更新できたかのように見えてしまう（PostgRESTの既知の挙動）
+    const { error } = await supabase
+      .from("cards")
+      .update({ name: parsed.data })
+      .eq("id", cardId)
+      .select()
+      .single();
+    if (error) {
+      return { success: false, error: toCardError(error) };
+    }
 
-  return { success: true };
+    return { success: true };
+  } catch (error) {
+    console.error("[cards] unexpected error", error);
+    return { success: false, error: UNEXPECTED_ERROR };
+  }
 }
 
 export async function deleteCard(cardId: string): Promise<CardActionState> {
-  const supabase = await createClient();
-  const { error } = await supabase
-    .from("cards")
-    .delete()
-    .eq("id", cardId)
-    .select()
-    .single();
-  if (error) {
-    return { success: false, error: toCardError(error) };
-  }
+  try {
+    const supabase = await createClient();
+    const { error } = await supabase
+      .from("cards")
+      .delete()
+      .eq("id", cardId)
+      .select()
+      .single();
+    if (error) {
+      return { success: false, error: toCardError(error) };
+    }
 
-  return { success: true };
+    return { success: true };
+  } catch (error) {
+    console.error("[cards] unexpected error", error);
+    return { success: false, error: UNEXPECTED_ERROR };
+  }
 }
