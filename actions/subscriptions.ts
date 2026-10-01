@@ -1,6 +1,7 @@
 "use server";
 
 import { z } from "zod";
+import { getTodayJST } from "@/lib/date";
 import { createClient } from "@/lib/supabase/server";
 
 export interface SubscriptionActionState {
@@ -52,7 +53,15 @@ const subscriptionInputSchema = z
       .min(1, { error: "日数は1〜3650の範囲で入力してください" })
       .max(3650, { error: "日数は1〜3650の範囲で入力してください" })
       .optional(),
-    next_billing_date: z.iso.date({ error: "有効な日付を入力してください" }),
+    // next_billing_dateは今日(JST)以降のみ許可する。過去日を許すと、日次バッチの
+    // carryForwardBilling（T5-1）が経過した周期分すべてをpayment_historyへ記録して
+    // しまい、実際には発生していない支払いを捏造することになる。これはrequirements.md
+    // F-9「記録するのは実績のみ（過去には遡らない）」に反する
+    next_billing_date: z.iso
+      .date({ error: "有効な日付を入力してください" })
+      .refine((value) => value >= getTodayJST(), {
+        message: "次回請求日は今日以降の日付を入力してください",
+      }),
     is_trial: z.boolean(),
     card_id: z.uuid({ error: "不正なカードです" }).optional(),
     // requirements.md F-1: カードは登録済みのものから選ぶか、その場で新規作成できる
