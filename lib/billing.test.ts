@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calculateMonthlyAmount } from "./billing";
+import { calculateMonthlyAmount, carryForwardBilling } from "./billing";
 
 describe("calculateMonthlyAmount", () => {
   it("monthlyは金額そのまま", () => {
@@ -64,5 +64,147 @@ describe("calculateMonthlyAmount", () => {
         cycleDays: 0,
       }),
     ).toThrow();
+  });
+});
+
+describe("carryForwardBilling", () => {
+  it("next_billing_date === todayでは繰り越さない（請求日当日は進めない）", () => {
+    const result = carryForwardBilling({
+      nextBillingDate: "2026-03-15",
+      billingAnchorDay: 15,
+      cycle: "monthly",
+      amount: 1000,
+      isTrial: false,
+      today: "2026-03-15",
+    });
+    expect(result).toEqual({
+      nextBillingDate: "2026-03-15",
+      isTrial: false,
+      billedEvents: [],
+    });
+  });
+
+  it("design.mdの例の通り月末問題を解決する: 1/31→2/28→3/31（2/28→3/28にならない）", () => {
+    const result = carryForwardBilling({
+      nextBillingDate: "2026-01-31",
+      billingAnchorDay: 31,
+      cycle: "monthly",
+      amount: 1000,
+      isTrial: false,
+      today: "2026-04-01",
+    });
+    expect(result.billedEvents.map((e) => e.billedOn)).toEqual([
+      "2026-01-31",
+      "2026-02-28",
+      "2026-03-31",
+    ]);
+    expect(result.nextBillingDate).toBe("2026-04-30");
+  });
+
+  it("うるう年（2024年）の2/29を正しく経由する", () => {
+    const result = carryForwardBilling({
+      nextBillingDate: "2024-01-31",
+      billingAnchorDay: 31,
+      cycle: "monthly",
+      amount: 1000,
+      isTrial: false,
+      today: "2024-03-02",
+    });
+    expect(result.billedEvents.map((e) => e.billedOn)).toEqual([
+      "2024-01-31",
+      "2024-02-29",
+    ]);
+    expect(result.nextBillingDate).toBe("2024-03-31");
+  });
+
+  it("weeklyで複数周期分を一度に追いつかせる", () => {
+    const result = carryForwardBilling({
+      nextBillingDate: "2026-01-01",
+      billingAnchorDay: 1,
+      cycle: "weekly",
+      amount: 500,
+      isTrial: false,
+      today: "2026-01-29",
+    });
+    expect(result.billedEvents.map((e) => e.billedOn)).toEqual([
+      "2026-01-01",
+      "2026-01-08",
+      "2026-01-15",
+      "2026-01-22",
+    ]);
+    expect(result.nextBillingDate).toBe("2026-01-29");
+  });
+
+  it("custom_daysで指定日数ごとに繰り越す", () => {
+    const result = carryForwardBilling({
+      nextBillingDate: "2026-01-01",
+      billingAnchorDay: 1,
+      cycle: "custom_days",
+      cycleDays: 10,
+      amount: 300,
+      isTrial: false,
+      today: "2026-01-25",
+    });
+    expect(result.billedEvents.map((e) => e.billedOn)).toEqual([
+      "2026-01-01",
+      "2026-01-11",
+      "2026-01-21",
+    ]);
+    expect(result.nextBillingDate).toBe("2026-01-31");
+  });
+
+  it("yearlyは自前計算せず日付ライブラリに委任し、複数年の追いつきもできる", () => {
+    const result = carryForwardBilling({
+      nextBillingDate: "2025-03-15",
+      billingAnchorDay: 15,
+      cycle: "yearly",
+      amount: 12000,
+      isTrial: false,
+      today: "2026-04-01",
+    });
+    expect(result.billedEvents.map((e) => e.billedOn)).toEqual([
+      "2025-03-15",
+      "2026-03-15",
+    ]);
+    expect(result.nextBillingDate).toBe("2027-03-15");
+  });
+
+  it("繰り越しが1回でも発生すればis_trialをfalseにする（トライアル終了＝初回請求）", () => {
+    const result = carryForwardBilling({
+      nextBillingDate: "2026-01-01",
+      billingAnchorDay: 1,
+      cycle: "monthly",
+      amount: 1000,
+      isTrial: true,
+      today: "2026-02-01",
+    });
+    expect(result.isTrial).toBe(false);
+  });
+
+  it("繰り越しが発生しなければis_trialを変更しない", () => {
+    const result = carryForwardBilling({
+      nextBillingDate: "2026-05-01",
+      billingAnchorDay: 1,
+      cycle: "monthly",
+      amount: 1000,
+      isTrial: true,
+      today: "2026-01-01",
+    });
+    expect(result.isTrial).toBe(true);
+    expect(result.billedEvents).toEqual([]);
+  });
+
+  it("billedEventsの各行に請求額が記録される", () => {
+    const result = carryForwardBilling({
+      nextBillingDate: "2026-01-01",
+      billingAnchorDay: 1,
+      cycle: "monthly",
+      amount: 1980,
+      isTrial: false,
+      today: "2026-02-01",
+    });
+    expect(result.billedEvents).toEqual([
+      { billedOn: "2026-01-01", amount: 1980 },
+    ]);
   });
 });
