@@ -248,6 +248,7 @@ export type Database = {
           p_next_billing_date: string;
           p_service_name: string;
           p_subscription_id: string;
+          p_today: string;
         };
         Returns: {
           amount: number;

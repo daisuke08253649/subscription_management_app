@@ -62,15 +62,12 @@ const subscriptionInputSchema = z
       .min(1, { error: "日数は1〜3650の範囲で入力してください" })
       .max(3650, { error: "日数は1〜3650の範囲で入力してください" })
       .optional(),
-    // next_billing_dateは今日(JST)以降のみ許可する。過去日を許すと、日次バッチの
-    // carryForwardBilling（T5-1）が経過した周期分すべてをpayment_historyへ記録して
-    // しまい、実際には発生していない支払いを捏造することになる。これはrequirements.md
-    // F-9「記録するのは実績のみ（過去には遡らない）」に反する
-    next_billing_date: z.iso
-      .date({ error: "有効な日付を入力してください" })
-      .refine((value) => value >= getTodayJST(), {
-        message: "次回請求日は今日以降の日付を入力してください",
-      }),
+    // next_billing_dateが今日(JST)以降かどうかは、createSubscriptionでは常に、
+    // updateSubscriptionでは「実際に日付が変更された場合のみ」検証する
+    // （日付が未変更なら、繰り越し未処理で期限超過のまま残っている正当な状態を
+    // 無関係な項目の編集まで巻き込んでブロックしないため。詳細は各関数を参照）。
+    // そのため検証自体はここではなく、createSubscriptionとDB関数側で行う
+    next_billing_date: z.iso.date({ error: "有効な日付を入力してください" }),
     is_trial: z.boolean(),
     card_id: z.uuid({ error: "不正なカードです" }).optional(),
     // requirements.md F-1: カードは登録済みのものから選ぶか、その場で新規作成できる
@@ -130,6 +127,11 @@ function toSubscriptionError(error: { code?: string; message: string }) {
     // フォームを開いた後に日次バッチ等が対象行を更新していた場合に発生する
     return "他の操作により内容が更新されています。画面を再読み込みしてください";
   }
+  if (error.code === "P0005") {
+    // update_subscription_with_card内：next_billing_dateが実際に変更され、
+    // かつ変更後の値が過去日だった場合
+    return "次回請求日は今日以降の日付を入力してください";
+  }
   if (
     error.code === "P0001" || // 他ユーザーのcard_idを指すトリガー違反
     error.code === "P0002" || // RPC内のSTRICT INTOで対象が見つからない（RLSによる非表示含む）
@@ -150,6 +152,17 @@ export async function createSubscription(
     return { success: false, error: parsed.error.issues[0].message };
   }
   const input = parsed.data;
+
+  // 新規登録では必ず今日(JST)以降の日付のみ許可する。過去日を許すと、日次バッチの
+  // carryForwardBilling（T5-1）が経過した周期分すべてをpayment_historyへ記録して
+  // しまい、実際には発生していない支払いを捏造することになる（requirements.md F-9
+  // 「記録するのは実績のみ（過去には遡らない）」に反する）
+  if (input.next_billing_date < getTodayJST()) {
+    return {
+      success: false,
+      error: "次回請求日は今日以降の日付を入力してください",
+    };
+  }
 
   try {
     const supabase = await createClient();
@@ -238,6 +251,7 @@ export async function updateSubscription(
       p_new_card_name: input.new_card_name ?? null,
       p_cancel_url: input.cancel_url ?? null,
       p_memo: input.memo ?? null,
+      p_today: getTodayJST(),
     } as UpdateSubscriptionArgs);
     if (error) {
       return { success: false, error: toSubscriptionError(error) };
