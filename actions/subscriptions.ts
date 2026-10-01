@@ -112,32 +112,37 @@ export async function createSubscription(
   }
   const input = parsed.data;
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return { success: false, error: UNAUTHORIZED_ERROR };
-  }
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      return { success: false, error: UNAUTHORIZED_ERROR };
+    }
 
-  const { error } = await supabase.from("subscriptions").insert({
-    user_id: user.id,
-    service_name: input.service_name,
-    amount: input.amount,
-    cycle: input.cycle,
-    cycle_days: input.cycle_days ?? null,
-    next_billing_date: input.next_billing_date,
-    billing_anchor_day: billingAnchorDayFrom(input.next_billing_date),
-    is_trial: input.is_trial,
-    card_id: input.card_id ?? null,
-    cancel_url: input.cancel_url ?? null,
-    memo: input.memo ?? null,
-  });
-  if (error) {
-    return { success: false, error: toSubscriptionError(error) };
-  }
+    const { error } = await supabase.from("subscriptions").insert({
+      user_id: user.id,
+      service_name: input.service_name,
+      amount: input.amount,
+      cycle: input.cycle,
+      cycle_days: input.cycle_days ?? null,
+      next_billing_date: input.next_billing_date,
+      billing_anchor_day: billingAnchorDayFrom(input.next_billing_date),
+      is_trial: input.is_trial,
+      card_id: input.card_id ?? null,
+      cancel_url: input.cancel_url ?? null,
+      memo: input.memo ?? null,
+    });
+    if (error) {
+      return { success: false, error: toSubscriptionError(error) };
+    }
 
-  return { success: true };
+    return { success: true };
+  } catch (error) {
+    console.error("[subscriptions] unexpected error", error);
+    return { success: false, error: UNEXPECTED_ERROR };
+  }
 }
 
 export async function updateSubscription(
@@ -155,29 +160,57 @@ export async function updateSubscription(
   }
   const input = parsed.data;
 
-  const supabase = await createClient();
-  const { error } = await supabase
-    .from("subscriptions")
-    .update({
-      service_name: input.service_name,
-      amount: input.amount,
-      cycle: input.cycle,
-      cycle_days: input.cycle_days ?? null,
-      next_billing_date: input.next_billing_date,
-      billing_anchor_day: billingAnchorDayFrom(input.next_billing_date),
-      is_trial: input.is_trial,
-      card_id: input.card_id ?? null,
-      cancel_url: input.cancel_url ?? null,
-      memo: input.memo ?? null,
-    })
-    .eq("id", idParsed.data)
-    .select()
-    .single();
-  if (error) {
-    return { success: false, error: toSubscriptionError(error) };
-  }
+  try {
+    const supabase = await createClient();
 
-  return { success: true };
+    // next_billing_dateが実際に変更された場合のみ、その「日」からbilling_anchor_day
+    // を再計算する。変更されていない場合（月末で丸められた日付のまま他の項目だけ
+    // 編集した場合など）に既存のanchorを保持しないと、繰り越しの基準日が丸められた
+    // 値（例: 28）で上書きされ、以後の繰り越しが本来の基準（例: 31）に戻らなくなる
+    // （design.md 6章の月末問題そのもの）
+    const { data: current, error: fetchError } = await supabase
+      .from("subscriptions")
+      .select("next_billing_date, billing_anchor_day")
+      .eq("id", idParsed.data)
+      .single();
+    if (fetchError || !current) {
+      return {
+        success: false,
+        error: toSubscriptionError(fetchError ?? { message: "not found" }),
+      };
+    }
+
+    const billingAnchorDay =
+      input.next_billing_date === current.next_billing_date
+        ? current.billing_anchor_day
+        : billingAnchorDayFrom(input.next_billing_date);
+
+    const { error } = await supabase
+      .from("subscriptions")
+      .update({
+        service_name: input.service_name,
+        amount: input.amount,
+        cycle: input.cycle,
+        cycle_days: input.cycle_days ?? null,
+        next_billing_date: input.next_billing_date,
+        billing_anchor_day: billingAnchorDay,
+        is_trial: input.is_trial,
+        card_id: input.card_id ?? null,
+        cancel_url: input.cancel_url ?? null,
+        memo: input.memo ?? null,
+      })
+      .eq("id", idParsed.data)
+      .select()
+      .single();
+    if (error) {
+      return { success: false, error: toSubscriptionError(error) };
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error("[subscriptions] unexpected error", error);
+    return { success: false, error: UNEXPECTED_ERROR };
+  }
 }
 
 export async function deleteSubscription(
@@ -188,18 +221,23 @@ export async function deleteSubscription(
     return { success: false, error: UNEXPECTED_ERROR };
   }
 
-  const supabase = await createClient();
-  const { error } = await supabase
-    .from("subscriptions")
-    .delete()
-    .eq("id", idParsed.data)
-    .select()
-    .single();
-  if (error) {
-    return { success: false, error: toSubscriptionError(error) };
-  }
+  try {
+    const supabase = await createClient();
+    const { error } = await supabase
+      .from("subscriptions")
+      .delete()
+      .eq("id", idParsed.data)
+      .select()
+      .single();
+    if (error) {
+      return { success: false, error: toSubscriptionError(error) };
+    }
 
-  return { success: true };
+    return { success: true };
+  } catch (error) {
+    console.error("[subscriptions] unexpected error", error);
+    return { success: false, error: UNEXPECTED_ERROR };
+  }
 }
 
 export async function cancelSubscription(
@@ -210,16 +248,21 @@ export async function cancelSubscription(
     return { success: false, error: UNEXPECTED_ERROR };
   }
 
-  const supabase = await createClient();
-  const { error } = await supabase
-    .from("subscriptions")
-    .update({ status: "cancelled" })
-    .eq("id", idParsed.data)
-    .select()
-    .single();
-  if (error) {
-    return { success: false, error: toSubscriptionError(error) };
-  }
+  try {
+    const supabase = await createClient();
+    const { error } = await supabase
+      .from("subscriptions")
+      .update({ status: "cancelled" })
+      .eq("id", idParsed.data)
+      .select()
+      .single();
+    if (error) {
+      return { success: false, error: toSubscriptionError(error) };
+    }
 
-  return { success: true };
+    return { success: true };
+  } catch (error) {
+    console.error("[subscriptions] unexpected error", error);
+    return { success: false, error: UNEXPECTED_ERROR };
+  }
 }
