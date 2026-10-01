@@ -196,7 +196,84 @@ export type Database = {
       [_ in never]: never;
     };
     Functions: {
-      [_ in never]: never;
+      create_subscription_with_card: {
+        Args: {
+          p_amount: number;
+          p_billing_anchor_day: number;
+          p_cancel_url: string;
+          p_card_id: string;
+          p_cycle: Database["public"]["Enums"]["subscription_cycle"];
+          p_cycle_days: number;
+          p_is_trial: boolean;
+          p_memo: string;
+          p_new_card_name: string;
+          p_next_billing_date: string;
+          p_service_name: string;
+        };
+        Returns: {
+          amount: number;
+          billing_anchor_day: number;
+          cancel_url: string | null;
+          card_id: string | null;
+          created_at: string;
+          cycle: Database["public"]["Enums"]["subscription_cycle"];
+          cycle_days: number | null;
+          id: string;
+          is_trial: boolean;
+          memo: string | null;
+          next_billing_date: string;
+          service_name: string;
+          status: Database["public"]["Enums"]["subscription_status"];
+          updated_at: string;
+          user_id: string;
+        };
+        SetofOptions: {
+          from: "*";
+          to: "subscriptions";
+          isOneToOne: true;
+          isSetofReturn: false;
+        };
+      };
+      update_subscription_with_card: {
+        Args: {
+          p_amount: number;
+          p_cancel_url: string;
+          p_card_id: string;
+          p_cycle: Database["public"]["Enums"]["subscription_cycle"];
+          p_cycle_days: number;
+          p_expected_updated_at: string;
+          p_is_trial: boolean;
+          p_memo: string;
+          p_new_card_name: string;
+          p_next_billing_date: string;
+          p_service_name: string;
+          p_subscription_id: string;
+          p_today: string;
+        };
+        Returns: {
+          amount: number;
+          billing_anchor_day: number;
+          cancel_url: string | null;
+          card_id: string | null;
+          created_at: string;
+          cycle: Database["public"]["Enums"]["subscription_cycle"];
+          cycle_days: number | null;
+          id: string;
+          is_trial: boolean;
+          memo: string | null;
+          next_billing_date: string;
+          service_name: string;
+          status: Database["public"]["Enums"]["subscription_status"];
+          updated_at: string;
+          user_id: string;
+        };
+        SetofOptions: {
+          from: "*";
+          to: "subscriptions";
+          isOneToOne: true;
+          isSetofReturn: false;
+        };
+      };
     };
     Enums: {
       subscription_cycle: "monthly" | "yearly" | "weekly" | "custom_days";
