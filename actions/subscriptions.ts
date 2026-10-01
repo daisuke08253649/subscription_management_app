@@ -189,6 +189,13 @@ export async function createSubscription(
       memo: input.memo ?? null,
     });
     if (error) {
+      // card_id・new_card_name共にPostgREST呼び出しは別リクエストのため
+      // 1トランザクションにはならない。新規作成したカードだけが残ってしまうと、
+      // 再送信時に同名カードの重複エラーで原因不明の失敗に見えるため、
+      // 今回新規作成したカードは後始末する
+      if (input.new_card_name && resolvedCard.cardId) {
+        await supabase.from("cards").delete().eq("id", resolvedCard.cardId);
+      }
       return { success: false, error: toSubscriptionError(error) };
     }
 
@@ -223,14 +230,16 @@ export async function updateSubscription(
       return { success: false, error: UNAUTHORIZED_ERROR };
     }
 
-    // next_billing_dateが実際に変更された場合のみ、その「日」からbilling_anchor_day
-    // を再計算する。変更されていない場合（月末で丸められた日付のまま他の項目だけ
-    // 編集した場合など）に既存のanchorを保持しないと、繰り越しの基準日が丸められた
-    // 値（例: 28）で上書きされ、以後の繰り越しが本来の基準（例: 31）に戻らなくなる
-    // （design.md 6章の月末問題そのもの）
+    // billing_anchor_dayは「monthly周期のままnext_billing_dateも変更されていない」
+    // 場合のみ既存の値を保持する。月末で丸められた日付のまま他の項目だけ編集した
+    // ケースで再計算すると、繰り越しの基準日が丸められた値（例: 28）で上書きされ、
+    // 以後の繰り越しが本来の基準（例: 31）に戻らなくなる（design.md 6章の月末問題）。
+    // 一方、weekly/custom_days等からmonthlyへ切り替える場合は、過去の登録時に
+    // 設定されたまま何年も更新されていない無関係なanchorが残っている可能性があるため、
+    // 周期がmonthlyのまま変わっていない場合に限ってのみ保持する
     const { data: current, error: fetchError } = await supabase
       .from("subscriptions")
-      .select("next_billing_date, billing_anchor_day")
+      .select("next_billing_date, billing_anchor_day, cycle")
       .eq("id", idParsed.data)
       .single();
     if (fetchError || !current) {
@@ -240,10 +249,13 @@ export async function updateSubscription(
       };
     }
 
-    const billingAnchorDay =
-      input.next_billing_date === current.next_billing_date
-        ? current.billing_anchor_day
-        : billingAnchorDayFrom(input.next_billing_date);
+    const shouldPreserveAnchor =
+      current.cycle === "monthly" &&
+      input.cycle === "monthly" &&
+      input.next_billing_date === current.next_billing_date;
+    const billingAnchorDay = shouldPreserveAnchor
+      ? current.billing_anchor_day
+      : billingAnchorDayFrom(input.next_billing_date);
 
     const resolvedCard = await resolveCardId(
       supabase,
@@ -273,6 +285,10 @@ export async function updateSubscription(
       .select()
       .single();
     if (error) {
+      // createSubscriptionと同様、新規作成したカードだけが残ってしまうのを防ぐ
+      if (input.new_card_name && resolvedCard.cardId) {
+        await supabase.from("cards").delete().eq("id", resolvedCard.cardId);
+      }
       return { success: false, error: toSubscriptionError(error) };
     }
 
