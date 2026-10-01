@@ -27,6 +27,12 @@ export function SubscriptionsPage({
   userEmail,
 }: SubscriptionsPageProps) {
   const [modal, setModal] = useState<ModalState>({ mode: "closed" });
+  // モーダルを開くたびに増やし、SubscriptionFormModalのkeyに使う。
+  // create時のkeyが常に"new"固定だと、1回目の登録成功でuseActionStateの
+  // state.successがtrueのまま残り、2回目の登録成功時にuseEffectの依存配列
+  // （state.success）が変化せず発火しない（モーダルが閉じず一覧も更新されない）
+  // バグがあったため、開くたびに必ず再マウントさせてstateをリセットする
+  const [formSessionId, setFormSessionId] = useState(0);
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-4 py-10">
@@ -49,7 +55,10 @@ export function SubscriptionsPage({
         <Button
           type="button"
           size="sm"
-          onClick={() => setModal({ mode: "create" })}
+          onClick={() => {
+            setFormSessionId((id) => id + 1);
+            setModal({ mode: "create" });
+          }}
         >
           追加
         </Button>
@@ -57,11 +66,14 @@ export function SubscriptionsPage({
 
       <SubscriptionList
         subscriptions={subscriptions}
-        onEdit={(subscription) => setModal({ mode: "edit", subscription })}
+        onEdit={(subscription) => {
+          setFormSessionId((id) => id + 1);
+          setModal({ mode: "edit", subscription });
+        }}
       />
 
       <SubscriptionFormModal
-        key={modal.mode === "edit" ? modal.subscription.id : "new"}
+        key={formSessionId}
         open={modal.mode !== "closed"}
         onClose={() => setModal({ mode: "closed" })}
         cards={cards}

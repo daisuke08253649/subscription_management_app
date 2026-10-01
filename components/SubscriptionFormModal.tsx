@@ -60,7 +60,21 @@ export function SubscriptionFormModal({
   }, [state.success, router]);
 
   return (
-    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        // 送信中（isPending）にEscape・外側クリック・閉じるボタンで閉じられると、
+        // このコンポーネントがアンマウントされてしまい、その後Server Actionが
+        // 成功してもrouter.refresh()を呼ぶuseEffectが発火しない（一覧が古いまま
+        // になる）。送信完了まで閉じられないようにする
+        if (!next && isPending) {
+          return;
+        }
+        if (!next) {
+          onClose();
+        }
+      }}
+    >
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{isEdit ? "サブスクを編集" : "サブスクを登録"}</DialogTitle>
