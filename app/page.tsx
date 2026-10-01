@@ -1,5 +1,4 @@
-import { logout } from "@/actions/auth";
-import { Button } from "@/components/ui/button";
+import { SubscriptionsPage } from "@/components/SubscriptionsPage";
 import { createClient } from "@/lib/supabase/server";
 
 export default async function Home(props: PageProps<"/">) {
@@ -9,24 +8,44 @@ export default async function Home(props: PageProps<"/">) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-4">
-      <p className="text-sm text-muted-foreground">
-        {user?.email} でログイン中
-      </p>
-      <p className="text-sm text-muted-foreground">
-        一覧画面は Phase 2 以降で実装予定です。
-      </p>
-      {searchParams.error === "logout_failed" ? (
+  const [subscriptionsResult, cardsResult] = await Promise.all([
+    supabase
+      .from("subscriptions")
+      .select("*, cards(id, name)")
+      .eq("status", "active")
+      .order("next_billing_date", { ascending: true }),
+    supabase.from("cards").select("id, name").order("name"),
+  ]);
+
+  // data ?? []で握りつぶすと、クエリが本当に失敗した場合でも
+  // 「登録0件」と誤認させてしまい、重複登録を誘発しかねない
+  if (subscriptionsResult.error || cardsResult.error) {
+    console.error(
+      "[page] failed to load data",
+      subscriptionsResult.error,
+      cardsResult.error,
+    );
+    return (
+      <div className="flex flex-1 items-center justify-center">
         <p className="text-sm text-destructive">
+          データの取得に失敗しました。時間をおいて再度お試しください
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {searchParams.error === "logout_failed" ? (
+        <p className="mt-4 text-center text-sm text-destructive">
           ログアウトに失敗しました。時間をおいて再度お試しください
         </p>
       ) : null}
-      <form action={logout}>
-        <Button type="submit" variant="outline">
-          ログアウト
-        </Button>
-      </form>
-    </div>
+      <SubscriptionsPage
+        subscriptions={subscriptionsResult.data ?? []}
+        cards={cardsResult.data ?? []}
+        userEmail={user?.email}
+      />
+    </>
   );
 }
