@@ -1,5 +1,7 @@
 import { SubscriptionsPage } from "@/components/SubscriptionsPage";
-import { calculateTotals } from "@/lib/billing";
+import { aggregateMonthlyPayments, calculateTotals } from "@/lib/billing";
+import { getTodayJST } from "@/lib/date";
+import { fetchAllRows } from "@/lib/supabase/paginate";
 import { createClient } from "@/lib/supabase/server";
 
 export default async function Home(props: PageProps<"/">) {
@@ -9,22 +11,36 @@ export default async function Home(props: PageProps<"/">) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const [subscriptionsResult, cardsResult] = await Promise.all([
+  const [subscriptionsResult, cardsResult, paymentsResult] = await Promise.all([
     supabase
       .from("subscriptions")
       .select("*, cards(id, name)")
       .eq("status", "active")
       .order("next_billing_date", { ascending: true }),
     supabase.from("cards").select("id, name").order("name"),
+    fetchAllRows((from, to) =>
+      supabase
+        .from("payment_history")
+        .select("billed_on, amount")
+        .order("billed_on", { ascending: true })
+        .order("id", { ascending: true })
+        .range(from, to),
+    ),
   ]);
 
   // data ?? []で握りつぶすと、クエリが本当に失敗した場合でも
   // 「登録0件」と誤認させてしまい、重複登録を誘発しかねない
-  if (subscriptionsResult.error || cardsResult.error) {
+  if (
+    subscriptionsResult.error ||
+    cardsResult.error ||
+    paymentsResult.error ||
+    !paymentsResult.data
+  ) {
     console.error(
       "[page] failed to load data",
       subscriptionsResult.error,
       cardsResult.error,
+      paymentsResult.error,
     );
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -43,6 +59,11 @@ export default async function Home(props: PageProps<"/">) {
     })),
   );
 
+  const monthlyPayments = aggregateMonthlyPayments(
+    paymentsResult.data,
+    getTodayJST().slice(0, 7),
+  );
+
   return (
     <>
       {searchParams.error === "logout_failed" ? (
@@ -56,6 +77,7 @@ export default async function Home(props: PageProps<"/">) {
         userEmail={user?.email}
         monthlyTotal={totals.monthlyTotal}
         yearlyTotal={totals.yearlyTotal}
+        monthlyPayments={monthlyPayments}
       />
     </>
   );

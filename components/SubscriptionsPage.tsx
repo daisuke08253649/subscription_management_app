@@ -9,7 +9,9 @@ import {
 } from "@/components/SubscriptionList";
 import { SubscriptionFormModal } from "@/components/SubscriptionFormModal";
 import { SubscriptionTotals } from "@/components/SubscriptionTotals";
+import { PaymentChart } from "@/components/PaymentChart";
 import { Button } from "@/components/ui/button";
+import type { MonthlyPayment } from "@/lib/billing";
 import type { Tables } from "@/lib/supabase/database.types";
 
 interface SubscriptionsPageProps {
@@ -18,6 +20,7 @@ interface SubscriptionsPageProps {
   userEmail?: string;
   monthlyTotal: number;
   yearlyTotal: number;
+  monthlyPayments: MonthlyPayment[];
 }
 
 type ModalState =
@@ -31,6 +34,7 @@ export function SubscriptionsPage({
   userEmail,
   monthlyTotal,
   yearlyTotal,
+  monthlyPayments,
 }: SubscriptionsPageProps) {
   const [modal, setModal] = useState<ModalState>({ mode: "closed" });
   // モーダルを開くたびに増やし、SubscriptionFormModalのkeyに使う。
@@ -60,6 +64,8 @@ export function SubscriptionsPage({
       </header>
 
       <SubscriptionTotals monthlyTotal={monthlyTotal} yearlyTotal={yearlyTotal} />
+
+      <PaymentChart data={monthlyPayments} />
 
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-medium text-muted-foreground">

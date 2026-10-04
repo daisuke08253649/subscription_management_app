@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  aggregateMonthlyPayments,
   calculateMonthlyAmount,
   calculateTotals,
   carryForwardBilling,
@@ -241,5 +242,40 @@ describe("calculateTotals", () => {
       monthlyTotal: 0,
       yearlyTotal: 0,
     });
+  });
+});
+
+describe("aggregateMonthlyPayments", () => {
+  it("履歴が無ければ空配列", () => {
+    expect(aggregateMonthlyPayments([], "2026-10")).toEqual([]);
+  });
+
+  it("月ごとに合算し、請求の無い月は0円で埋めて現在月まで連続させる", () => {
+    const result = aggregateMonthlyPayments(
+      [
+        { billed_on: "2026-07-15", amount: 1000 },
+        { billed_on: "2026-07-20", amount: 500 },
+        { billed_on: "2026-09-01", amount: 2000 },
+      ],
+      "2026-10",
+    );
+    expect(result).toEqual([
+      { month: "2026-07", total: 1500 },
+      { month: "2026-08", total: 0 },
+      { month: "2026-09", total: 2000 },
+      { month: "2026-10", total: 0 },
+    ]);
+  });
+
+  it("年をまたいでも連続する", () => {
+    const result = aggregateMonthlyPayments(
+      [{ billed_on: "2026-11-30", amount: 100 }],
+      "2027-01",
+    );
+    expect(result.map((r) => r.month)).toEqual([
+      "2026-11",
+      "2026-12",
+      "2027-01",
+    ]);
   });
 });
