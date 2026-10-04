@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { calculateMonthlyAmount, carryForwardBilling } from "./billing";
+import {
+  calculateMonthlyAmount,
+  calculateTotals,
+  carryForwardBilling,
+} from "./billing";
 
 describe("calculateMonthlyAmount", () => {
   it("monthlyは金額そのまま", () => {
@@ -206,5 +210,25 @@ describe("carryForwardBilling", () => {
     expect(result.billedEvents).toEqual([
       { billedOn: "2026-01-01", amount: 1980 },
     ]);
+  });
+});
+
+describe("calculateTotals", () => {
+  it("月額換算合計と年間総額（月額合計の12倍）を返す", () => {
+    const result = calculateTotals([
+      { amount: 1490, cycle: "monthly" },
+      { amount: 12000, cycle: "yearly" },
+      { amount: 100, cycle: "weekly" },
+    ]);
+    // 1490 + round(12000/12)=1000 + round(100*52/12)=433 = 2923
+    expect(result.monthlyTotal).toBe(2923);
+    expect(result.yearlyTotal).toBe(2923 * 12);
+  });
+
+  it("空配列では0を返す", () => {
+    expect(calculateTotals([])).toEqual({
+      monthlyTotal: 0,
+      yearlyTotal: 0,
+    });
   });
 });

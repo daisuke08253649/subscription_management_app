@@ -39,6 +39,29 @@ export function calculateMonthlyAmount({
   }
 }
 
+export interface SubscriptionTotals {
+  monthlyTotal: number;
+  yearlyTotal: number;
+}
+
+/**
+ * 契約中サブスク一覧から月額換算合計・年間総額を出す（design.md 4章・F-3）。
+ * 年間総額は月額換算合計の12倍とする（各サブスクのyearly換算を個別に
+ * 丸めて合算すると、画面に表示される「月額合計×12」と一致しなくなるため）
+ */
+export function calculateTotals(
+  subscriptions: BillingInput[],
+): SubscriptionTotals {
+  const monthlyTotal = subscriptions.reduce(
+    (sum, sub) => sum + calculateMonthlyAmount(sub),
+    0,
+  );
+  return {
+    monthlyTotal,
+    yearlyTotal: monthlyTotal * 12,
+  };
+}
+
 function parseDateOnly(value: string): Date {
   const [year, month, day] = value.split("-").map(Number);
   return new Date(year, month - 1, day);
