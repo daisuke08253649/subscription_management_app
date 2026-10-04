@@ -18,8 +18,11 @@ import type { Tables } from "@/lib/supabase/database.types";
  * Vercel Cronからのみ呼ばれる想定のため、CRON_SECRETで保護する（design.md 5章）
  */
 export async function GET(request: Request) {
+  const cronSecret = process.env.CRON_SECRET;
   const authHeader = request.headers.get("authorization");
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  // CRON_SECRET未設定時、`Bearer ${undefined}` === "Bearer undefined"という
+  // 固定文字列と一致してしまうと誰でも叩けてしまうため、未設定なら明示的に拒否する
+  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
     return new Response("Unauthorized", { status: 401 });
   }
 
@@ -88,13 +91,20 @@ async function rolloverOverdueSubscriptions(
         if (historyError) throw historyError;
       }
 
+      // updated_atで楽観ロックする。fetch後、このupdateまでの間にユーザーが
+      // 画面から編集していた場合、ここでの計算は古い値に基づいているため、
+      // 新しい編集を上書きしてしまわないよう対象0件（＝並行編集あり）なら
+      // 更新せずスキップする（既存のupdateSubscription RPCと同じ考え方）
       const { error: updateError } = await admin
         .from("subscriptions")
         .update({
           next_billing_date: result.nextBillingDate,
           is_trial: result.isTrial,
         })
-        .eq("id", sub.id);
+        .eq("id", sub.id)
+        .eq("updated_at", sub.updated_at)
+        .select()
+        .maybeSingle();
       if (updateError) throw updateError;
     } catch (error) {
       console.error(`[cron/daily] rollover failed for subscription ${sub.id}`, error);
@@ -109,18 +119,40 @@ interface DueNotification {
 }
 
 async function sendDueNotifications(admin: AdminClient, today: string) {
-  const [subscriptionsResult, settingsResult, logsResult] = await Promise.all([
-    admin.from("subscriptions").select("*").eq("status", "active"),
-    admin.from("settings").select("*"),
+  // next_billing_date >= todayのみを対象にする。繰り越し処理が失敗した
+  // サブスクはnext_billing_dateが過去日のまま残り、daysRemainingが負の値に
+  // なってどのkindの条件も満たしてしまう（「-1日後」のような通知が送られ、
+  // 本来の請求日でもないtarget_dateがログに記録されてしまう）ため除外する
+  const [subscriptionsResult, settingsResult] = await Promise.all([
     admin
-      .from("notification_logs")
-      .select("subscription_id, target_date, kind"),
+      .from("subscriptions")
+      .select("*")
+      .eq("status", "active")
+      .gte("next_billing_date", today),
+    admin.from("settings").select("*"),
   ]);
-  if (subscriptionsResult.error || settingsResult.error || logsResult.error) {
+  if (subscriptionsResult.error || settingsResult.error) {
     console.error(
       "[cron/daily] failed to fetch data for notifications",
       subscriptionsResult.error,
       settingsResult.error,
+    );
+    return;
+  }
+
+  // notification_logsは年月を経ると増え続けるため全件取得はせず、
+  // 今回対象になりうるサブスクの分だけに絞って取得する
+  const subscriptionIds = subscriptionsResult.data.map((sub) => sub.id);
+  const logsResult =
+    subscriptionIds.length === 0
+      ? { data: [] as Pick<Tables<"notification_logs">, "subscription_id" | "target_date" | "kind">[], error: null }
+      : await admin
+          .from("notification_logs")
+          .select("subscription_id, target_date, kind")
+          .in("subscription_id", subscriptionIds);
+  if (logsResult.error) {
+    console.error(
+      "[cron/daily] failed to fetch notification logs",
       logsResult.error,
     );
     return;
@@ -160,7 +192,17 @@ async function sendDueNotifications(admin: AdminClient, today: string) {
     dueByUser.set(sub.user_id, list);
   }
 
-  const appUrl = process.env.APP_URL ?? "http://localhost:3000";
+  if (dueByUser.size === 0) return;
+
+  // APP_URLが未設定のままlocalhostにフォールバックすると、本番で届く
+  // メールのリンクが誰にも開けないものになってしまう（design.md 10章の
+  // 環境変数一覧に必須項目として明記）。送信してしまうと「送信済み」として
+  // 記録され翌日の追いつきでも直らないため、未設定時は送信自体をスキップする
+  const appUrl = process.env.APP_URL;
+  if (!appUrl) {
+    console.error("[cron/daily] APP_URL is not set, skipping notifications");
+    return;
+  }
 
   for (const [userId, items] of dueByUser) {
     try {
@@ -170,6 +212,7 @@ async function sendDueNotifications(admin: AdminClient, today: string) {
       const notificationItems: NotificationItem[] = items.map((item) => ({
         serviceName: item.subscription.service_name,
         amount: item.subscription.amount,
+        billingDate: item.subscription.next_billing_date,
         daysRemaining: item.daysRemaining,
         cancelUrl: item.subscription.cancel_url,
       }));
