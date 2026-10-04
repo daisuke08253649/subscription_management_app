@@ -50,11 +50,16 @@ async function rolloverOverdueSubscriptions(
   admin: AdminClient,
   today: string,
 ) {
-  const { data: overdue, error: fetchError } = await admin
-    .from("subscriptions")
-    .select("*")
-    .eq("status", "active")
-    .lt("next_billing_date", today);
+  const { data: overdue, error: fetchError } = await fetchAllRows(
+    (from, to) =>
+      admin
+        .from("subscriptions")
+        .select("*")
+        .eq("status", "active")
+        .lt("next_billing_date", today)
+        .order("id", { ascending: true })
+        .range(from, to),
+  );
   if (fetchError) {
     console.error("[cron/daily] failed to fetch overdue subscriptions", fetchError);
     return;
