@@ -1,4 +1,5 @@
 import { getTodayJST } from "@/lib/date";
+import { fetchAllRows } from "@/lib/supabase/paginate";
 import { createClient } from "@/lib/supabase/server";
 import type { Tables } from "@/lib/supabase/database.types";
 
@@ -33,9 +34,16 @@ function statusLabel(status: Tables<"subscriptions">["status"]): string {
   return status === "active" ? "契約中" : "解約済み";
 }
 
+// =, +, -, @で始まる値はExcel等で数式として解釈されうる（CSVインジェクション）。
+// 先頭にシングルクォートを付与し、文字列として開かれるようにする
+// https://community.owasp.org/attacks/CSV_Injection
+function neutralizeFormula(text: string): string {
+  return /^[=+\-@]/.test(text) ? `'${text}` : text;
+}
+
 // カンマ・改行・ダブルクォートを含む場合のみクォートする（表計算ソフト向けCSV）
 function csvField(value: string | number | null): string {
-  const text = value === null ? "" : String(value);
+  const text = neutralizeFormula(value === null ? "" : String(value));
   if (/[",\n]/.test(text)) {
     return `"${text.replace(/"/g, '""')}"`;
   }
@@ -56,11 +64,14 @@ export async function GET() {
     return new Response("Unauthorized", { status: 401 });
   }
 
-  const { data: subscriptions, error } = await supabase
-    .from("subscriptions")
-    .select("*, cards(name)")
-    .order("created_at", { ascending: true });
-  if (error) {
+  const { data: subscriptions, error } = await fetchAllRows((from, to) =>
+    supabase
+      .from("subscriptions")
+      .select("*, cards(name)")
+      .order("created_at", { ascending: true })
+      .range(from, to),
+  );
+  if (error || !subscriptions) {
     console.error("[export/csv]", error);
     return new Response("Internal Server Error", { status: 500 });
   }

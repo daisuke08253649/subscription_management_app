@@ -1,4 +1,5 @@
 import { getTodayJST } from "@/lib/date";
+import { fetchAllRows } from "@/lib/supabase/paginate";
 import { createClient } from "@/lib/supabase/server";
 
 /**
@@ -19,21 +20,34 @@ export async function GET() {
 
   const [subscriptions, cards, paymentHistory, notificationLogs, settings] =
     await Promise.all([
-      supabase
-        .from("subscriptions")
-        .select("*")
-        .order("created_at", { ascending: true }),
-      supabase.from("cards").select("*").order("created_at", {
-        ascending: true,
-      }),
-      supabase
-        .from("payment_history")
-        .select("*")
-        .order("billed_on", { ascending: true }),
-      supabase
-        .from("notification_logs")
-        .select("*")
-        .order("sent_at", { ascending: true }),
+      fetchAllRows((from, to) =>
+        supabase
+          .from("subscriptions")
+          .select("*")
+          .order("created_at", { ascending: true })
+          .range(from, to),
+      ),
+      fetchAllRows((from, to) =>
+        supabase
+          .from("cards")
+          .select("*")
+          .order("created_at", { ascending: true })
+          .range(from, to),
+      ),
+      fetchAllRows((from, to) =>
+        supabase
+          .from("payment_history")
+          .select("*")
+          .order("billed_on", { ascending: true })
+          .range(from, to),
+      ),
+      fetchAllRows((from, to) =>
+        supabase
+          .from("notification_logs")
+          .select("*")
+          .order("sent_at", { ascending: true })
+          .range(from, to),
+      ),
       supabase.from("settings").select("*").maybeSingle(),
     ]);
 
@@ -56,6 +70,9 @@ export async function GET() {
       payment_history: paymentHistory.data,
       notification_logs: notificationLogs.data,
       settings: settings.data,
+      // settings.notify_emailがnullの場合、design.md 3章によりauth.users.emailが
+      // 実際の通知先になる。JSON単体で設定を再現できるよう実効値も含める
+      effective_notify_email: settings.data?.notify_email ?? user.email ?? null,
     },
     null,
     2,
