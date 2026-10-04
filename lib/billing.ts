@@ -173,3 +173,45 @@ export function carryForwardBilling({
     billedEvents,
   };
 }
+
+export interface MonthlyPayment {
+  /** YYYY-MM */
+  month: string;
+  total: number;
+}
+
+/**
+ * payment_historyをbilled_onの年月で集計する（design.md 8章）。
+ * 最初の請求月から現在月まで、請求の無い月も0円で埋めて連続した月軸にする。
+ * 履歴が無ければ空配列を返す
+ */
+export function aggregateMonthlyPayments(
+  rows: { billed_on: string; amount: number }[],
+  currentMonth: string,
+): MonthlyPayment[] {
+  if (rows.length === 0) return [];
+
+  const totals = new Map<string, number>();
+  for (const row of rows) {
+    const month = row.billed_on.slice(0, 7);
+    totals.set(month, (totals.get(month) ?? 0) + row.amount);
+  }
+
+  const months = [...totals.keys()].sort();
+  const first = months[0];
+  const last = months[months.length - 1] > currentMonth ? months[months.length - 1] : currentMonth;
+
+  const result: MonthlyPayment[] = [];
+  let [year, month] = first.split("-").map(Number);
+  const [lastYear, lastMonth] = last.split("-").map(Number);
+  while (year < lastYear || (year === lastYear && month <= lastMonth)) {
+    const key = `${year}-${String(month).padStart(2, "0")}`;
+    result.push({ month: key, total: totals.get(key) ?? 0 });
+    month += 1;
+    if (month > 12) {
+      month = 1;
+      year += 1;
+    }
+  }
+  return result;
+}
