@@ -85,6 +85,7 @@ export function CardManagement({ cards }: CardManagementProps) {
               {editingId === card.id ? (
                 <div className="flex flex-1 items-center gap-2">
                   <Input
+                    disabled={isPending}
                     value={editingName}
                     maxLength={50}
                     onChange={(event) => setEditingName(event.target.value)}
@@ -140,6 +141,7 @@ export function CardManagement({ cards }: CardManagementProps) {
 
       <form onSubmit={handleCreate} className="flex items-center gap-2">
         <Input
+          disabled={isPending}
           id={newCardId}
           placeholder="新しいカード名"
           maxLength={50}
