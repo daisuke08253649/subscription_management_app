@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { logout } from "@/actions/auth";
 import {
   SubscriptionList,
@@ -46,11 +47,16 @@ export function SubscriptionsPage({
           <h1 className="font-heading text-lg font-medium">サブスク管理</h1>
           <p className="text-sm text-muted-foreground">{userEmail}</p>
         </div>
-        <form action={logout}>
-          <Button type="submit" variant="outline" size="sm">
-            ログアウト
+        <div className="flex items-center gap-2">
+          <Button asChild variant="outline" size="sm">
+            <Link href="/settings">設定</Link>
           </Button>
-        </form>
+          <form action={logout}>
+            <Button type="submit" variant="outline" size="sm">
+              ログアウト
+            </Button>
+          </form>
+        </div>
       </header>
 
       <SubscriptionTotals monthlyTotal={monthlyTotal} yearlyTotal={yearlyTotal} />
