@@ -143,7 +143,13 @@ async function sendDueNotifications(admin: AdminClient, today: string) {
         .order("id", { ascending: true })
         .range(from, to),
     ),
-    admin.from("settings").select("*"),
+    fetchAllRows((from, to) =>
+      admin
+        .from("settings")
+        .select("*")
+        .order("user_id", { ascending: true })
+        .range(from, to),
+    ),
     // 現在のサイクルのtarget_dateは必ず今日以降。過去サイクルのログは
     // 判定に不要なので除外して件数を抑える
     fetchAllRows((from, to) =>
@@ -159,6 +165,7 @@ async function sendDueNotifications(admin: AdminClient, today: string) {
     subscriptionsResult.error ||
     settingsResult.error ||
     logsResult.error ||
+    !settingsResult.data ||
     !subscriptionsResult.data ||
     !logsResult.data
   ) {
