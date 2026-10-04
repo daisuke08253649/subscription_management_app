@@ -8,6 +8,7 @@ import {
   type NotificationItem,
 } from "@/lib/notifications";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { fetchAllRows } from "@/lib/supabase/paginate";
 import type { Tables } from "@/lib/supabase/database.types";
 
 /**
@@ -123,36 +124,43 @@ async function sendDueNotifications(admin: AdminClient, today: string) {
   // サブスクはnext_billing_dateが過去日のまま残り、daysRemainingが負の値に
   // なってどのkindの条件も満たしてしまう（「-1日後」のような通知が送られ、
   // 本来の請求日でもないtarget_dateがログに記録されてしまう）ため除外する
-  const [subscriptionsResult, settingsResult] = await Promise.all([
-    admin
-      .from("subscriptions")
-      .select("*")
-      .eq("status", "active")
-      .gte("next_billing_date", today),
+  // Data APIは1000行で切り捨てるため、増え続ける可能性のある
+  // subscriptions・notification_logsはfetchAllRowsで全件取得する。
+  // 切り捨てられると未訪問のサブスクが通知されなかったり、記録済みの
+  // ログが「未送信」と誤認されて重複送信されたりする
+  const [subscriptionsResult, settingsResult, logsResult] = await Promise.all([
+    fetchAllRows((from, to) =>
+      admin
+        .from("subscriptions")
+        .select("*")
+        .eq("status", "active")
+        .gte("next_billing_date", today)
+        .order("id", { ascending: true })
+        .range(from, to),
+    ),
     admin.from("settings").select("*"),
+    // 現在のサイクルのtarget_dateは必ず今日以降。過去サイクルのログは
+    // 判定に不要なので除外して件数を抑える
+    fetchAllRows((from, to) =>
+      admin
+        .from("notification_logs")
+        .select("subscription_id, target_date, kind")
+        .gte("target_date", today)
+        .order("id", { ascending: true })
+        .range(from, to),
+    ),
   ]);
-  if (subscriptionsResult.error || settingsResult.error) {
+  if (
+    subscriptionsResult.error ||
+    settingsResult.error ||
+    logsResult.error ||
+    !subscriptionsResult.data ||
+    !logsResult.data
+  ) {
     console.error(
       "[cron/daily] failed to fetch data for notifications",
       subscriptionsResult.error,
       settingsResult.error,
-    );
-    return;
-  }
-
-  // notification_logsは年月を経ると増え続けるため全件取得はせず、
-  // 今回対象になりうるサブスクの分だけに絞って取得する
-  const subscriptionIds = subscriptionsResult.data.map((sub) => sub.id);
-  const logsResult =
-    subscriptionIds.length === 0
-      ? { data: [] as Pick<Tables<"notification_logs">, "subscription_id" | "target_date" | "kind">[], error: null }
-      : await admin
-          .from("notification_logs")
-          .select("subscription_id, target_date, kind")
-          .in("subscription_id", subscriptionIds);
-  if (logsResult.error) {
-    console.error(
-      "[cron/daily] failed to fetch notification logs",
       logsResult.error,
     );
     return;
