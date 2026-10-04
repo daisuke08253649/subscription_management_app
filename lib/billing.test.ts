@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { calculateMonthlyAmount, carryForwardBilling } from "./billing";
+import {
+  calculateMonthlyAmount,
+  calculateTotals,
+  carryForwardBilling,
+} from "./billing";
 
 describe("calculateMonthlyAmount", () => {
   it("monthlyは金額そのまま", () => {
@@ -206,5 +210,36 @@ describe("carryForwardBilling", () => {
     expect(result.billedEvents).toEqual([
       { billedOn: "2026-01-01", amount: 1980 },
     ]);
+  });
+});
+
+describe("calculateTotals", () => {
+  it("月額換算合計と年間総額をそれぞれ丸め前の値から独立して計算する", () => {
+    const result = calculateTotals([
+      { amount: 1490, cycle: "monthly" },
+      { amount: 12000, cycle: "yearly" },
+      { amount: 100, cycle: "weekly" },
+    ]);
+    // monthlyTotal = round(1490 + 12000/12 + 100*52/12) = round(2923.33...) = 2923
+    expect(result.monthlyTotal).toBe(2923);
+    // yearlyTotal = round(1490*12 + 12000 + 100*52) = 35080
+    // （monthlyTotal * 12 = 35076とは一致しない。各サブスクの年額換算を
+    // 丸め前の値から直接合算しているため）
+    expect(result.yearlyTotal).toBe(35080);
+  });
+
+  it("年額サブスク単体では、丸め誤差で実際の年間支払額とずれない", () => {
+    // 5900 / 12 = 491.66... を一度月額に丸めてから12倍すると
+    // 492 * 12 = 5904となり実際の年払い額とずれてしまう問題の回帰テスト
+    const result = calculateTotals([{ amount: 5900, cycle: "yearly" }]);
+    expect(result.monthlyTotal).toBe(492);
+    expect(result.yearlyTotal).toBe(5900);
+  });
+
+  it("空配列では0を返す", () => {
+    expect(calculateTotals([])).toEqual({
+      monthlyTotal: 0,
+      yearlyTotal: 0,
+    });
   });
 });

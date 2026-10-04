@@ -7,6 +7,7 @@ import {
   type SubscriptionWithCard,
 } from "@/components/SubscriptionList";
 import { SubscriptionFormModal } from "@/components/SubscriptionFormModal";
+import { SubscriptionTotals } from "@/components/SubscriptionTotals";
 import { Button } from "@/components/ui/button";
 import type { Tables } from "@/lib/supabase/database.types";
 
@@ -14,6 +15,8 @@ interface SubscriptionsPageProps {
   subscriptions: SubscriptionWithCard[];
   cards: Pick<Tables<"cards">, "id" | "name">[];
   userEmail?: string;
+  monthlyTotal: number;
+  yearlyTotal: number;
 }
 
 type ModalState =
@@ -25,6 +28,8 @@ export function SubscriptionsPage({
   subscriptions,
   cards,
   userEmail,
+  monthlyTotal,
+  yearlyTotal,
 }: SubscriptionsPageProps) {
   const [modal, setModal] = useState<ModalState>({ mode: "closed" });
   // モーダルを開くたびに増やし、SubscriptionFormModalのkeyに使う。
@@ -47,6 +52,8 @@ export function SubscriptionsPage({
           </Button>
         </form>
       </header>
+
+      <SubscriptionTotals monthlyTotal={monthlyTotal} yearlyTotal={yearlyTotal} />
 
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-medium text-muted-foreground">

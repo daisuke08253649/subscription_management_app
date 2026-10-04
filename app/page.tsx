@@ -1,4 +1,5 @@
 import { SubscriptionsPage } from "@/components/SubscriptionsPage";
+import { calculateTotals } from "@/lib/billing";
 import { createClient } from "@/lib/supabase/server";
 
 export default async function Home(props: PageProps<"/">) {
@@ -34,6 +35,14 @@ export default async function Home(props: PageProps<"/">) {
     );
   }
 
+  const totals = calculateTotals(
+    subscriptionsResult.data.map((sub) => ({
+      amount: sub.amount,
+      cycle: sub.cycle,
+      cycleDays: sub.cycle_days,
+    })),
+  );
+
   return (
     <>
       {searchParams.error === "logout_failed" ? (
@@ -45,6 +54,8 @@ export default async function Home(props: PageProps<"/">) {
         subscriptions={subscriptionsResult.data ?? []}
         cards={cardsResult.data ?? []}
         userEmail={user?.email}
+        monthlyTotal={totals.monthlyTotal}
+        yearlyTotal={totals.yearlyTotal}
       />
     </>
   );
