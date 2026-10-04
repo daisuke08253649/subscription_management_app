@@ -25,6 +25,7 @@ export async function GET() {
           .from("subscriptions")
           .select("*")
           .order("created_at", { ascending: true })
+          .order("id", { ascending: true })
           .range(from, to),
       ),
       fetchAllRows((from, to) =>
@@ -32,6 +33,7 @@ export async function GET() {
           .from("cards")
           .select("*")
           .order("created_at", { ascending: true })
+          .order("id", { ascending: true })
           .range(from, to),
       ),
       fetchAllRows((from, to) =>
@@ -39,6 +41,7 @@ export async function GET() {
           .from("payment_history")
           .select("*")
           .order("billed_on", { ascending: true })
+          .order("id", { ascending: true })
           .range(from, to),
       ),
       fetchAllRows((from, to) =>
@@ -46,6 +49,7 @@ export async function GET() {
           .from("notification_logs")
           .select("*")
           .order("sent_at", { ascending: true })
+          .order("id", { ascending: true })
           .range(from, to),
       ),
       supabase.from("settings").select("*").maybeSingle(),

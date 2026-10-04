@@ -69,6 +69,7 @@ export async function GET() {
       .from("subscriptions")
       .select("*, cards(name)")
       .order("created_at", { ascending: true })
+      .order("id", { ascending: true })
       .range(from, to),
   );
   if (error || !subscriptions) {
