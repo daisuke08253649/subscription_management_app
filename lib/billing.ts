@@ -16,27 +16,31 @@ export interface BillingInput {
 }
 
 /**
- * 請求周期の違いを正規化し、月額換算額（四捨五入済み）を返す。
- * 換算ルールはdesign.md 4章の表に基づく。DBには換算値を保存しない。
+ * 請求周期の違いを正規化し、月額換算額（丸め前）を返す。
+ * 換算ルールはdesign.md 4章の表に基づく。
  */
-export function calculateMonthlyAmount({
-  amount,
-  cycle,
-  cycleDays,
-}: BillingInput): number {
+function rawMonthlyEquivalent({ amount, cycle, cycleDays }: BillingInput): number {
   switch (cycle) {
     case "monthly":
       return amount;
     case "yearly":
-      return Math.round(amount / 12);
+      return amount / 12;
     case "weekly":
-      return Math.round((amount * 52) / 12);
+      return (amount * 52) / 12;
     case "custom_days":
       if (!cycleDays || cycleDays <= 0) {
         throw new Error("custom_daysの場合はcycleDaysが1以上の整数で必要です");
       }
-      return Math.round((amount * 365) / cycleDays / 12);
+      return (amount * 365) / cycleDays / 12;
   }
+}
+
+/**
+ * 請求周期の違いを正規化し、月額換算額（四捨五入済み）を返す。
+ * DBには換算値を保存しない。
+ */
+export function calculateMonthlyAmount(input: BillingInput): number {
+  return Math.round(rawMonthlyEquivalent(input));
 }
 
 export interface SubscriptionTotals {
@@ -46,20 +50,21 @@ export interface SubscriptionTotals {
 
 /**
  * 契約中サブスク一覧から月額換算合計・年間総額を出す（design.md 4章・F-3）。
- * 年間総額は月額換算合計の12倍とする（各サブスクのyearly換算を個別に
- * 丸めて合算すると、画面に表示される「月額合計×12」と一致しなくなるため）
+ * 端数は表示時に四捨五入する方針（design.md）のため、月額・年額それぞれを
+ * 丸め前の値から独立して合算・丸めする。月額換算を個別に丸めてから12倍すると、
+ * 例えば年額5,900円のサブスクが「月額492円×12=5,904円」という実際の支払額と
+ * ずれた年間総額になってしまうため
  */
 export function calculateTotals(
   subscriptions: BillingInput[],
 ): SubscriptionTotals {
-  const monthlyTotal = subscriptions.reduce(
-    (sum, sub) => sum + calculateMonthlyAmount(sub),
-    0,
+  const monthlyTotal = Math.round(
+    subscriptions.reduce((sum, sub) => sum + rawMonthlyEquivalent(sub), 0),
   );
-  return {
-    monthlyTotal,
-    yearlyTotal: monthlyTotal * 12,
-  };
+  const yearlyTotal = Math.round(
+    subscriptions.reduce((sum, sub) => sum + rawMonthlyEquivalent(sub) * 12, 0),
+  );
+  return { monthlyTotal, yearlyTotal };
 }
 
 function parseDateOnly(value: string): Date {
