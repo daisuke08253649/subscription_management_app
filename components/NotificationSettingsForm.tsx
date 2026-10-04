@@ -82,6 +82,7 @@ export function NotificationSettingsForm({
       <div className="flex flex-col gap-2">
         <Label htmlFor={emailId}>通知先メールアドレス</Label>
         <Input
+          disabled={isPending}
           id={emailId}
           type="email"
           placeholder="未入力の場合はログイン中のメールアドレスを使用します"
@@ -98,6 +99,7 @@ export function NotificationSettingsForm({
             return (
               <div key={day} className="flex items-center gap-2">
                 <Checkbox
+                  disabled={isPending}
                   id={id}
                   checked={selectedPresets.has(day)}
                   onCheckedChange={() => togglePreset(day)}
@@ -114,6 +116,7 @@ export function NotificationSettingsForm({
             その他（日前）
           </Label>
           <Input
+            disabled={isPending}
             id={customDayId}
             type="number"
             min={0}

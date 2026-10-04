@@ -28,17 +28,28 @@ export interface UpdateSettingsInput {
   notifyDays: number[];
 }
 
+const inputSchema = z.object({
+  notifyEmail: notifyEmailSchema,
+  notifyDays: notifyDaysSchema,
+});
+
 export async function updateSettings(
   input: UpdateSettingsInput,
 ): Promise<SettingsActionState> {
-  const emailParsed = notifyEmailSchema.safeParse(input.notifyEmail);
-  if (!emailParsed.success) {
-    return { success: false, error: emailParsed.error.issues[0].message };
+  // Server Actionは直接呼び出せるため、引数の形そのものもここで検証する
+  const parsed = inputSchema.safeParse(input);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return {
+      success: false,
+      error:
+        issue.path[0] === "notifyEmail"
+          ? issue.message
+          : "通知日数の指定が正しくありません",
+    };
   }
-  const daysParsed = notifyDaysSchema.safeParse(input.notifyDays);
-  if (!daysParsed.success) {
-    return { success: false, error: "通知日数の指定が正しくありません" };
-  }
+  const emailParsed = { data: parsed.data.notifyEmail };
+  const daysParsed = { data: parsed.data.notifyDays };
 
   try {
     const supabase = await createClient();
