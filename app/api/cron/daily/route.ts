@@ -19,10 +19,6 @@ export const maxDuration = 60;
 // 巻き込まれるのを防ぐ）
 const ROLLOVER_TIME_BUDGET_MS = 30_000;
 
-// 1回のバッチで送るメールの上限。Resend無料枠は100通/日（design.md 2章）で、
-// 通知先を悪用した大量送信による枠の枯渇から、所有者自身の通知を守る
-const MAX_EMAILS_PER_RUN = 50;
-
 // 1通のメールに載せる件数の上限。同じ宛先を指定した多数のアカウントの内容が
 // 1通に集約されても、メール容量・メモリが膨らまないようにする。
 // 載せなかった分はログに記録しないため、請求日前であれば翌日に再度対象になる
@@ -62,15 +58,6 @@ export async function GET(request: Request) {
     console.error("[cron/daily] unexpected error", error);
     return new Response("OK", { status: 200 });
   }
-}
-
-// 文字列から決定的な数値を作る簡易ハッシュ（暗号用途ではない）
-function dailyOrderKey(value: string): number {
-  let hash = 0;
-  for (let i = 0; i < value.length; i++) {
-    hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
-  }
-  return hash;
 }
 
 type AdminClient = ReturnType<typeof createAdminClient>;
@@ -293,26 +280,11 @@ async function sendDueNotifications(admin: AdminClient, today: string) {
     }
   }
 
-  // 上限に達しても、請求日が近いものから先に送る（固定順で後ろの利用者が
-  // 毎日取り残されることがないよう、緊急度の高い順に処理する）
-  // 同じ緊急度の中では、日付をシードにした順序で並べて毎日入れ替える
-  // （固定順だと、同順位の多数の宛先のうち同じ人だけが毎日先に送られ続ける）
-  const ordered = [...recipients.entries()]
-    .map(([email, items]) => ({
-      email,
-      items,
-      urgency: Math.min(...items.map((i) => i.daysRemaining)),
-      tieBreak: dailyOrderKey(`${today}:${email}`),
-    }))
-    .sort((a, b) => a.urgency - b.urgency || a.tieBreak - b.tieBreak)
-    .map(({ email, items }) => [email, items] as const);
-
-  let emailsSent = 0;
-  for (const [email, allItems] of ordered) {
-    if (emailsSent >= MAX_EMAILS_PER_RUN) {
-      console.error("[cron/daily] email cap reached, deferring the rest");
-      break;
-    }
+  // 送信数に上限は設けない。通知の件数に上限が無いこと(F-4)を優先する。
+  // 上限を設けると、超えた宛先の通知が、翌日の繰り越しでtarget_dateが進むため
+  // 再送されず失われる。通知先の悪用への対策は、宛先ごとの集約・本文の無害化・
+  // DB制約と、サインアップの無効化（運用）で行う（Issue #18）
+  for (const [email, allItems] of recipients) {
     try {
       const included = [...allItems]
         .sort((a, b) => a.daysRemaining - b.daysRemaining)
@@ -328,7 +300,6 @@ async function sendDueNotifications(admin: AdminClient, today: string) {
 
       const content = buildNotificationEmail(notificationItems, appUrl);
       const sendResult = await sendNotificationEmail(email, content);
-      emailsSent += 1;
 
       // design.md 13章: 送信成功時のみ記録する。失敗時は翌日のバッチが
       // 「未送信」として自動的に再送を試みる
