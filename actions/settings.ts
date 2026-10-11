@@ -23,7 +23,7 @@ const notifyEmailSchema = z
 // design.md 12章: 0〜365の整数。重複は保存時に除去する
 const notifyDaysSchema = z
   .array(z.coerce.number().int().min(0).max(365))
-  .max(20);
+  .max(366);
 
 export interface UpdateSettingsInput {
   notifyEmail: string;

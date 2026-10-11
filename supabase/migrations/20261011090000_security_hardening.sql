@@ -107,7 +107,7 @@ update public.settings
   set notify_days = '{3,1}'
   where not (
     coalesce(array_ndims(notify_days), 1) = 1
-    and cardinality(notify_days) <= 20
+    and cardinality(notify_days) <= 366
     and array_position(notify_days, null) is null
     and 0 <= all (notify_days)
     and 365 >= all (notify_days)
@@ -129,7 +129,7 @@ update public.subscriptions
 alter table public.settings
   add constraint settings_notify_days_check check (
     coalesce(array_ndims(notify_days), 1) = 1
-    and cardinality(notify_days) <= 20
+    and cardinality(notify_days) <= 366
     and array_position(notify_days, null) is null
     and 0 <= all (notify_days)
     and 365 >= all (notify_days)
