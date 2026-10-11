@@ -16,6 +16,12 @@ interface SubscriptionListProps {
   onEdit: (subscription: SubscriptionWithCard) => void;
 }
 
+// 入力時にhttp(s)を検証しているが、DBに直接入った値でjavascript:等が
+// リンクにならないよう表示側でも確認する
+function isHttpUrl(value: string | null): value is string {
+  return value !== null && /^https?:\/\//.test(value);
+}
+
 function formatYen(amount: number): string {
   return `${amount.toLocaleString("ja-JP")}円`;
 }
@@ -92,7 +98,14 @@ export function SubscriptionList({
       {subscriptions.map((sub) => (
         <li key={sub.id} className="flex flex-col gap-2 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
-            <p className="truncate font-medium">{sub.service_name}</p>
+            <p className="flex items-center gap-2 font-medium">
+              <span className="truncate">{sub.service_name}</span>
+              {sub.is_trial ? (
+                <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-xs font-normal text-muted-foreground">
+                  トライアル中
+                </span>
+              ) : null}
+            </p>
             <p className="text-sm text-muted-foreground">
               {formatCycle(sub)}・次回請求 {formatBillingDate(sub.next_billing_date)}
               {sub.cards ? `・${sub.cards.name}` : ""}
@@ -101,6 +114,13 @@ export function SubscriptionList({
           <div className="flex shrink-0 items-center gap-4">
             <p className="tabular-nums">{formatYen(sub.amount)}</p>
             <div className="flex gap-1">
+              {isHttpUrl(sub.cancel_url) ? (
+                <Button asChild variant="ghost" size="sm">
+                  <a href={sub.cancel_url} target="_blank" rel="noopener noreferrer">
+                    解約ページ
+                  </a>
+                </Button>
+              ) : null}
               <Button
                 type="button"
                 variant="ghost"
