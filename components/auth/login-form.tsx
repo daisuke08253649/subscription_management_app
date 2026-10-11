@@ -16,7 +16,13 @@ import { Label } from "@/components/ui/label";
 
 const initialState: AuthActionState = { success: false };
 
-export function LoginForm({ initialError }: { initialError?: string }) {
+export function LoginForm({
+  initialError,
+  signupEnabled,
+}: {
+  initialError?: string;
+  signupEnabled: boolean;
+}) {
   const [state, formAction, isPending] = useActionState(login, initialState);
   const error = state.error ?? initialError;
 
@@ -62,15 +68,17 @@ export function LoginForm({ initialError }: { initialError?: string }) {
           <Button type="submit" className="w-full" disabled={isPending}>
             {isPending ? "ログイン中..." : "ログイン"}
           </Button>
-          <p className="text-center text-sm text-muted-foreground">
-            アカウントをお持ちでない場合は
-            <Link
-              href="/auth/signup"
-              className="ml-1 text-foreground underline underline-offset-4"
-            >
-              新規登録
-            </Link>
-          </p>
+          {signupEnabled ? (
+            <p className="text-center text-sm text-muted-foreground">
+              アカウントをお持ちでない場合は
+              <Link
+                href="/auth/signup"
+                className="ml-1 text-foreground underline underline-offset-4"
+              >
+                新規登録
+              </Link>
+            </p>
+          ) : null}
         </CardContent>
       </form>
     </Card>

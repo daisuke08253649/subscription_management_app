@@ -3,6 +3,7 @@
 import type { AuthError } from "@supabase/supabase-js";
 import { redirect } from "next/navigation";
 import { z } from "zod";
+import { isSignupEnabled } from "@/lib/signup";
 import { createClient } from "@/lib/supabase/server";
 
 export interface AuthActionState {
@@ -23,8 +24,18 @@ const credentialsSchema = z.object({
   password: passwordSchema,
 });
 
+// design.md 12章: パスワードの強度検証はSupabase Auth側に任せる
+// （supabase/config.tomlのminimum_password_length・password_requirements）。
+// アクション側は空でないことだけ確認し、weak_passwordを日本語化して返す
+const newPasswordSchema = passwordSchema;
+
+const signupSchema = z.object({
+  email: emailSchema,
+  password: newPasswordSchema,
+});
+
 const resetRequestSchema = z.object({ email: emailSchema });
-const updatePasswordSchema = z.object({ password: passwordSchema });
+const updatePasswordSchema = z.object({ password: newPasswordSchema });
 
 const UNEXPECTED_ERROR_MESSAGE =
   "エラーが発生しました。時間をおいて再度お試しください";
@@ -43,7 +54,9 @@ function toJapaneseAuthError(error: AuthError): string {
     case "email_exists":
       return "このメールアドレスは既に登録されています";
     case "weak_password":
-      return "パスワードの強度が不十分です";
+      return "パスワードが要件を満たしていません。8文字以上で、大文字・小文字・数字をすべて含めてください";
+    case "signup_disabled":
+      return "現在、新規登録は受け付けていません";
     case "same_password":
       return "現在と同じパスワードは設定できません";
     case "over_email_send_rate_limit":
@@ -102,7 +115,12 @@ export async function signup(
   _prevState: AuthActionState,
   formData: FormData,
 ): Promise<AuthActionState> {
-  const parsed = credentialsSchema.safeParse({
+  // 画面導線を消すだけでなく、Server Actionの直接呼び出しも拒否する
+  if (!isSignupEnabled()) {
+    return { success: false, error: "現在、新規登録は受け付けていません" };
+  }
+
+  const parsed = signupSchema.safeParse({
     email: formData.get("email"),
     password: formData.get("password"),
   });
