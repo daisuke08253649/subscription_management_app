@@ -23,8 +23,20 @@ const credentialsSchema = z.object({
   password: passwordSchema,
 });
 
+// 新しくパスワードを設定する（新規登録・再設定）場合のみ最小長を課す。
+// ログインには課さない（以前の短いパスワードでログインできなくなるため）。
+// supabase/config.tomlのminimum_password_length・password_requirementsと合わせる
+const newPasswordSchema = z
+  .string()
+  .min(8, { error: "パスワードは8文字以上で入力してください" });
+
+const signupSchema = z.object({
+  email: emailSchema,
+  password: newPasswordSchema,
+});
+
 const resetRequestSchema = z.object({ email: emailSchema });
-const updatePasswordSchema = z.object({ password: passwordSchema });
+const updatePasswordSchema = z.object({ password: newPasswordSchema });
 
 const UNEXPECTED_ERROR_MESSAGE =
   "エラーが発生しました。時間をおいて再度お試しください";
@@ -102,7 +114,7 @@ export async function signup(
   _prevState: AuthActionState,
   formData: FormData,
 ): Promise<AuthActionState> {
-  const parsed = credentialsSchema.safeParse({
+  const parsed = signupSchema.safeParse({
     email: formData.get("email"),
     password: formData.get("password"),
   });
