@@ -19,9 +19,7 @@ export const maxDuration = 60;
 // 巻き込まれるのを防ぐ）
 const ROLLOVER_TIME_BUDGET_MS = 30_000;
 
-// 1通のメールに載せる件数の上限。同じ宛先を指定した多数のアカウントの内容が
-// 1通に集約されても、メール容量・メモリが膨らまないようにする。
-// 載せなかった分はログに記録しないため、請求日前であれば翌日に再度対象になる
+// 1通のメールに載せる件数の上限（超える分は複数通に分割して全件送る）。
 const MAX_ITEMS_PER_EMAIL = 50;
 
 // 宛先アドレスの取得を同時に実行する件数
@@ -285,44 +283,48 @@ async function sendDueNotifications(admin: AdminClient, today: string) {
   // 再送されず失われる。通知先の悪用への対策は、宛先ごとの集約・本文の無害化・
   // DB制約と、サインアップの無効化（運用）で行う（Issue #18）
   for (const [email, allItems] of recipients) {
-    try {
-      const included = [...allItems]
-        .sort((a, b) => a.daysRemaining - b.daysRemaining)
-        .slice(0, MAX_ITEMS_PER_EMAIL);
-      const notificationItems: NotificationItem[] = included.map((item) => ({
-        serviceName: item.subscription.service_name,
-        amount: item.subscription.amount,
-        billingDate: item.subscription.next_billing_date,
-        daysRemaining: item.daysRemaining,
-        cancelUrl: item.subscription.cancel_url,
-        isTrial: item.subscription.is_trial,
-      }));
+    // 1通あたりMAX_ITEMS_PER_EMAIL件までに分割して送る。1通に詰めすぎると
+    // メール容量・メモリが膨らむが、切り捨てると請求日当日の通知が翌日の繰り越しで
+    // 失われるため、請求日の近い順に複数通へ分けて全件送る（F-4）
+    const sorted = [...allItems].sort((a, b) => a.daysRemaining - b.daysRemaining);
+    for (let i = 0; i < sorted.length; i += MAX_ITEMS_PER_EMAIL) {
+      const included = sorted.slice(i, i + MAX_ITEMS_PER_EMAIL);
+      try {
+        const notificationItems: NotificationItem[] = included.map((item) => ({
+          serviceName: item.subscription.service_name,
+          amount: item.subscription.amount,
+          billingDate: item.subscription.next_billing_date,
+          daysRemaining: item.daysRemaining,
+          cancelUrl: item.subscription.cancel_url,
+          isTrial: item.subscription.is_trial,
+        }));
 
-      const content = buildNotificationEmail(notificationItems, appUrl);
-      const sendResult = await sendNotificationEmail(email, content);
+        const content = buildNotificationEmail(notificationItems, appUrl);
+        const sendResult = await sendNotificationEmail(email, content);
 
-      // design.md 13章: 送信成功時のみ記録する。失敗時は翌日のバッチが
-      // 「未送信」として自動的に再送を試みる
-      if (sendResult.success) {
-        const logRows = included.flatMap((item) =>
-          item.kinds.map((kind) => ({
-            subscription_id: item.subscription.id,
-            target_date: item.subscription.next_billing_date,
-            kind,
-          })),
-        );
-        const { error: logError } = await admin
-          .from("notification_logs")
-          .insert(logRows);
-        if (logError) {
-          console.error(
-            "[cron/daily] failed to record notification_logs",
-            logError,
+        // design.md 13章: 送信成功時のみ記録する。失敗時は翌日のバッチが
+        // 「未送信」として自動的に再送を試みる
+        if (sendResult.success) {
+          const logRows = included.flatMap((item) =>
+            item.kinds.map((kind) => ({
+              subscription_id: item.subscription.id,
+              target_date: item.subscription.next_billing_date,
+              kind,
+            })),
           );
+          const { error: logError } = await admin
+            .from("notification_logs")
+            .insert(logRows);
+          if (logError) {
+            console.error(
+              "[cron/daily] failed to record notification_logs",
+              logError,
+            );
+          }
         }
+      } catch (error) {
+        console.error("[cron/daily] notification failed", error);
       }
-    } catch (error) {
-      console.error("[cron/daily] notification failed", error);
     }
   }
 }

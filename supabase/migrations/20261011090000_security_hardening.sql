@@ -118,7 +118,7 @@ update public.settings
   where notify_email is not null
     and not (
       char_length(notify_email) <= 254
-      and notify_email ~ '^[^[:space:],;<>"]+@[^[:space:],;<>"@]+\.[^[:space:],;<>"@]+$'
+      and notify_email ~ '^[^[:space:],;<>"@]+@[^[:space:],;<>"@]+\.[^[:space:],;<>"@]+$'
     );
 
 update public.subscriptions
@@ -144,7 +144,7 @@ alter table public.settings
     notify_email is null
     or (
       char_length(notify_email) <= 254
-      and notify_email ~ '^[^[:space:],;<>"]+@[^[:space:],;<>"@]+\.[^[:space:],;<>"@]+$'
+      and notify_email ~ '^[^[:space:],;<>"@]+@[^[:space:],;<>"@]+\.[^[:space:],;<>"@]+$'
     )
   );
 
