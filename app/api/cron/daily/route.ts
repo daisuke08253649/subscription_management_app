@@ -22,9 +22,6 @@ const ROLLOVER_TIME_BUDGET_MS = 30_000;
 // 1通のメールに載せる件数の上限（超える分は複数通に分割して全件送る）。
 const MAX_ITEMS_PER_EMAIL = 50;
 
-// 宛先アドレスの取得を同時に実行する件数
-const RECIPIENT_LOOKUP_CONCURRENCY = 10;
-
 /**
  * 日次バッチ（design.md 6章）。
  * 1. 繰り越し：期日を過ぎたactiveなサブスクをnext_billing_date >= todayまで進める
@@ -250,32 +247,28 @@ async function sendDueNotifications(admin: AdminClient, today: string) {
   // 送らせる攻撃（複数アカウントのnotify_emailを同じ被害者にする）でも、
   // 1回のバッチで1アドレスにつき1通に抑える
   const recipients = new Map<string, DueNotification[]>();
-  const dueEntries = [...dueByUser.entries()];
-  // 宛先の取得（auth.usersの管理API）は1件ずつ待つと件数に比例して遅くなり、
-  // 最初のメールを送る前にタイムアウトしうるため、一定数ずつ並行して解決する
-  for (let i = 0; i < dueEntries.length; i += RECIPIENT_LOOKUP_CONCURRENCY) {
-    const chunk = dueEntries.slice(i, i + RECIPIENT_LOOKUP_CONCURRENCY);
-    const resolved = await Promise.all(
-      chunk.map(async ([userId, items]) => {
-        try {
-          return {
-            email: await resolveNotifyEmail(admin, userId, settingsByUser),
-            items,
-          };
-        } catch (error) {
-          console.error(`[cron/daily] failed to resolve recipient for user ${userId}`, error);
-          return { email: null, items };
-        }
-      }),
-    );
-    for (const { email, items } of resolved) {
-      if (!email) continue;
-      // ローカル部は大文字小文字を区別する実装があるため保持し、ドメインのみ
-      // 小文字化する（Owner@とowner@を同一視すると別人の通知内容が混ざる）
-      const at = email.lastIndexOf("@");
-      const key = email.slice(0, at + 1) + email.slice(at + 1).toLowerCase();
-      recipients.set(key, [...(recipients.get(key) ?? []), ...items]);
+  // 通知先を明示していない利用者のauth.users.emailは、利用者ごとに問い合わせず
+  // 管理APIの一覧取得（1回で最大1000件）でまとめて取得する。利用者数に比例した
+  // 待ち時間で、最初のメールを送る前にタイムアウトするのを防ぐ
+  const needAuthEmail = new Set(
+    [...dueByUser.keys()].filter(
+      (userId) => !settingsByUser.get(userId)?.notify_email,
+    ),
+  );
+  const authEmails = await loadAuthEmails(admin, needAuthEmail);
+
+  for (const [userId, items] of dueByUser) {
+    const email =
+      settingsByUser.get(userId)?.notify_email || authEmails.get(userId);
+    if (!email) {
+      console.error(`[cron/daily] could not resolve email for user ${userId}`);
+      continue;
     }
+    // ローカル部は大文字小文字を区別する実装があるため保持し、ドメインのみ
+    // 小文字化する（Owner@とowner@を同一視すると別人の通知内容が混ざる）
+    const at = email.lastIndexOf("@");
+    const key = email.slice(0, at + 1) + email.slice(at + 1).toLowerCase();
+    recipients.set(key, [...(recipients.get(key) ?? []), ...items]);
   }
 
   // 送信数に上限は設けない。通知の件数に上限が無いこと(F-4)を優先する。
@@ -329,19 +322,26 @@ async function sendDueNotifications(admin: AdminClient, today: string) {
   }
 }
 
-async function resolveNotifyEmail(
+// design.md 3章: 通知先メールの既定はauth.users.email。
+// 必要な利用者が全員見つかるか、最後のページに達するまで一覧取得する
+async function loadAuthEmails(
   admin: AdminClient,
-  userId: string,
-  settingsByUser: Map<string, Tables<"settings">>,
-): Promise<string | null> {
-  const notifyEmail = settingsByUser.get(userId)?.notify_email;
-  if (notifyEmail) return notifyEmail;
+  userIds: Set<string>,
+): Promise<Map<string, string>> {
+  const found = new Map<string, string>();
+  if (userIds.size === 0) return found;
 
-  // design.md 3章: 通知先メールの既定はauth.users.email
-  const { data, error } = await admin.auth.admin.getUserById(userId);
-  if (error || !data.user?.email) {
-    console.error(`[cron/daily] could not resolve email for user ${userId}`, error);
-    return null;
+  const perPage = 1000;
+  for (let page = 1; ; page++) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
+    if (error) {
+      console.error("[cron/daily] failed to list auth users", error);
+      break;
+    }
+    for (const user of data.users) {
+      if (user.email && userIds.has(user.id)) found.set(user.id, user.email);
+    }
+    if (found.size >= userIds.size || data.users.length < perPage) break;
   }
-  return data.user.email;
+  return found;
 }
