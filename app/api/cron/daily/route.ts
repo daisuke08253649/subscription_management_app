@@ -11,6 +11,18 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchAllRows } from "@/lib/supabase/paginate";
 import type { Tables } from "@/lib/supabase/database.types";
 
+// Vercel Hobbyの関数実行時間の上限内で完了させるための上限
+export const maxDuration = 60;
+
+// 繰り越しに使う時間の上限。超えた分は翌日のバッチが「期日超過」として拾う
+// （異常データ・大量データでバッチ全体が止まり、他ユーザーの通知まで
+// 巻き込まれるのを防ぐ）
+const ROLLOVER_TIME_BUDGET_MS = 30_000;
+
+// 1回のバッチで送るメールの上限。Resend無料枠は100通/日（design.md 2章）で、
+// 通知先を悪用した大量送信による枠の枯渇から、所有者自身の通知を守る
+const MAX_EMAILS_PER_RUN = 50;
+
 /**
  * 日次バッチ（design.md 6章）。
  * 1. 繰り越し：期日を過ぎたactiveなサブスクをnext_billing_date >= todayまで進める
@@ -67,7 +79,12 @@ async function rolloverOverdueSubscriptions(
 
   // サブスク1件ごとにtry/catchし、1件の異常データが他件に影響しないようにする
   // （design.md 13章）
+  const startedAt = Date.now();
   for (const sub of overdue ?? []) {
+    if (Date.now() - startedAt > ROLLOVER_TIME_BUDGET_MS) {
+      console.error("[cron/daily] rollover time budget exceeded, deferring the rest");
+      break;
+    }
     try {
       const result = carryForwardBilling({
         nextBillingDate: sub.next_billing_date,
@@ -224,7 +241,12 @@ async function sendDueNotifications(admin: AdminClient, today: string) {
     return;
   }
 
+  let emailsSent = 0;
   for (const [userId, items] of dueByUser) {
+    if (emailsSent >= MAX_EMAILS_PER_RUN) {
+      console.error("[cron/daily] email cap reached, deferring the rest");
+      break;
+    }
     try {
       const email = await resolveNotifyEmail(admin, userId, settingsByUser);
       if (!email) continue;
@@ -240,6 +262,7 @@ async function sendDueNotifications(admin: AdminClient, today: string) {
 
       const content = buildNotificationEmail(notificationItems, appUrl);
       const sendResult = await sendNotificationEmail(email, content);
+      emailsSent += 1;
 
       // design.md 13章: 送信成功時のみ記録する。失敗時は翌日のバッチが
       // 「未送信」として自動的に再送を試みる

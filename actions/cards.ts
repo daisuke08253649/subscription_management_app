@@ -30,6 +30,9 @@ function toCardError(error: { code?: string; message: string }): string {
   if (error.code === "23505") {
     return "同じ名前のカードが既にあります";
   }
+  if (error.code === "P0007") {
+    return "登録できるカードの上限に達しています";
+  }
   if (error.code === "PGRST116") {
     return "カードが見つかりませんでした";
   }

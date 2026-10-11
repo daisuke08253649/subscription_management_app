@@ -114,6 +114,8 @@ function advanceOnce(
   }
 }
 
+export const MAX_CARRY_FORWARD_ITERATIONS = 1000;
+
 export interface CarryForwardInput {
   /** 現在のnext_billing_date（YYYY-MM-DD） */
   nextBillingDate: string;
@@ -160,7 +162,14 @@ export function carryForwardBilling({
   const billedEvents: BilledEvent[] = [];
   let nextIsTrial = isTrial;
 
+  // 異常なデータ（極端な過去日付など）で巨大なループ・履歴行を生成しないための上限。
+  // 最短周期（custom_days=1）でも約2.7年分で、バッチ停止からの正当な追いつきには十分
   while (currentDate < todayDate) {
+    if (billedEvents.length >= MAX_CARRY_FORWARD_ITERATIONS) {
+      throw new Error(
+        `carry forward exceeded ${MAX_CARRY_FORWARD_ITERATIONS} iterations`,
+      );
+    }
     billedEvents.push({ billedOn: formatDateOnly(currentDate), amount });
     // 繰り越しが発生した = 初回請求が発生した = トライアル終了（design.md 6章）
     nextIsTrial = false;

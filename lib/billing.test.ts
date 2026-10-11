@@ -4,6 +4,7 @@ import {
   calculateMonthlyAmount,
   calculateTotals,
   carryForwardBilling,
+  MAX_CARRY_FORWARD_ITERATIONS,
 } from "./billing";
 
 describe("calculateMonthlyAmount", () => {
@@ -277,5 +278,36 @@ describe("aggregateMonthlyPayments", () => {
       "2026-12",
       "2027-01",
     ]);
+  });
+});
+
+describe("carryForwardBilling の上限", () => {
+  it("極端な過去日付ではループせず例外を投げる", () => {
+    expect(() =>
+      carryForwardBilling({
+        nextBillingDate: "1900-01-01",
+        billingAnchorDay: 1,
+        cycle: "custom_days",
+        cycleDays: 1,
+        amount: 1,
+        isTrial: false,
+        today: "2026-10-11",
+      }),
+    ).toThrow(/exceeded/);
+  });
+
+  it("上限ちょうどまでの追いつきは成功する", () => {
+    const result = carryForwardBilling({
+      nextBillingDate: "2026-01-01",
+      billingAnchorDay: 1,
+      cycle: "custom_days",
+      cycleDays: 1,
+      amount: 1,
+      isTrial: false,
+      today: "2026-10-11",
+    });
+    expect(result.billedEvents.length).toBeLessThanOrEqual(
+      MAX_CARRY_FORWARD_ITERATIONS,
+    );
   });
 });
