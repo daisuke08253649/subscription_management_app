@@ -69,6 +69,9 @@ async function rolloverOverdueSubscriptions(
         .select("*")
         .eq("status", "active")
         .lt("next_billing_date", today)
+        // 時間予算で打ち切られた行は更新されずupdated_atが古いまま残るため、
+        // 古い順に処理すれば、処理済みの行が毎回先頭を占めて後ろが取り残されることがない
+        .order("updated_at", { ascending: true })
         .order("id", { ascending: true })
         .range(from, to),
   );
@@ -241,16 +244,36 @@ async function sendDueNotifications(admin: AdminClient, today: string) {
     return;
   }
 
-  let emailsSent = 0;
+  // 宛先アドレスごとに集約する。通知先を悪用して同じアドレスへ多数のメールを
+  // 送らせる攻撃（複数アカウントのnotify_emailを同じ被害者にする）でも、
+  // 1回のバッチで1アドレスにつき1通に抑える
+  const recipients = new Map<string, DueNotification[]>();
   for (const [userId, items] of dueByUser) {
+    try {
+      const email = await resolveNotifyEmail(admin, userId, settingsByUser);
+      if (!email) continue;
+      const key = email.toLowerCase();
+      recipients.set(key, [...(recipients.get(key) ?? []), ...items]);
+    } catch (error) {
+      console.error(`[cron/daily] failed to resolve recipient for user ${userId}`, error);
+    }
+  }
+
+  // 上限に達しても、請求日が近いものから先に送る（固定順で後ろの利用者が
+  // 毎日取り残されることがないよう、緊急度の高い順に処理する）
+  const ordered = [...recipients.entries()].sort(
+    ([, a], [, b]) =>
+      Math.min(...a.map((i) => i.daysRemaining)) -
+      Math.min(...b.map((i) => i.daysRemaining)),
+  );
+
+  let emailsSent = 0;
+  for (const [email, items] of ordered) {
     if (emailsSent >= MAX_EMAILS_PER_RUN) {
       console.error("[cron/daily] email cap reached, deferring the rest");
       break;
     }
     try {
-      const email = await resolveNotifyEmail(admin, userId, settingsByUser);
-      if (!email) continue;
-
       const notificationItems: NotificationItem[] = items.map((item) => ({
         serviceName: item.subscription.service_name,
         amount: item.subscription.amount,
@@ -279,13 +302,13 @@ async function sendDueNotifications(admin: AdminClient, today: string) {
           .insert(logRows);
         if (logError) {
           console.error(
-            `[cron/daily] failed to record notification_logs for user ${userId}`,
+            "[cron/daily] failed to record notification_logs",
             logError,
           );
         }
       }
     } catch (error) {
-      console.error(`[cron/daily] notification failed for user ${userId}`, error);
+      console.error("[cron/daily] notification failed", error);
     }
   }
 }
