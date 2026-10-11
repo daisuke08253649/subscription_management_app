@@ -5,7 +5,7 @@
 -- ============================================================
 
 -- ------------------------------------------------------------
--- #17: next_billing_dateの範囲制限
+-- #17: next_billing_dateの範囲制限（今日〜100年先）
 -- 過去日（例: 1900-01-01）を入れて日次バッチの繰り越しループを巨大化させる
 -- 攻撃を防ぐ。CHECKはvolatileな現在日付を使えないためトリガーで検証する。
 -- 日付が変更された時（とINSERT）のみ検証し、繰り越し未処理で期限超過のまま
@@ -22,12 +22,12 @@ begin
   if tg_op = 'UPDATE' and new.next_billing_date is not distinct from old.next_billing_date then
     return new;
   end if;
-  -- 下限: INSERTは今日（JST）以降（actions/subscriptions.tsと同じ。昨日を許すと
-  -- 登録前の支払い履歴が繰り越しで生成されてしまう）。UPDATEは日付をまたぐ操作との
-  -- 競合を許容するため1日前まで。
-  -- 上限: custom_daysの最大（3650日）を含む約11年先
-  if new.next_billing_date < v_today_jst - (case when tg_op = 'INSERT' then 0 else 1 end)
-     or new.next_billing_date > v_today_jst + interval '11 years' then
+  -- 下限: 今日（JST）以降（actions/subscriptions.ts・RPCと同じ。昨日を許すと、
+  -- 登録直後に日付を昨日へ変更して登録前の支払い履歴を繰り越しで生成できてしまう）。
+  -- 上限: 繰り越しループの対象外（未来日）なので、長期契約を拒否しない程度の
+  -- 常識的な値（100年）にとどめる
+  if new.next_billing_date < v_today_jst
+     or new.next_billing_date > v_today_jst + interval '100 years' then
     raise exception 'next_billing_date is out of the allowed range' using errcode = 'P0006';
   end if;
   return new;
@@ -98,10 +98,16 @@ create trigger cards_row_limit
 -- 既存データに不正値（この制約が無い間にREST直叩きで保存されたもの）があると
 -- ADD CONSTRAINTが失敗しマイグレーション全体が適用されないため、先に無害化する。
 -- notify_daysは既定値に戻し、notify_emailとcancel_urlは未設定(NULL)に戻す
+-- 多次元配列はarray_position等が例外になるため、先に別ステップで既定値へ戻す
+update public.settings
+  set notify_days = '{3,1}'
+  where array_ndims(notify_days) > 1;
+
 update public.settings
   set notify_days = '{3,1}'
   where not (
-    cardinality(notify_days) <= 20
+    coalesce(array_ndims(notify_days), 1) = 1
+    and cardinality(notify_days) <= 20
     and array_position(notify_days, null) is null
     and 0 <= all (notify_days)
     and 365 >= all (notify_days)
@@ -122,7 +128,8 @@ update public.subscriptions
 
 alter table public.settings
   add constraint settings_notify_days_check check (
-    cardinality(notify_days) <= 20
+    coalesce(array_ndims(notify_days), 1) = 1
+    and cardinality(notify_days) <= 20
     and array_position(notify_days, null) is null
     and 0 <= all (notify_days)
     and 365 >= all (notify_days)

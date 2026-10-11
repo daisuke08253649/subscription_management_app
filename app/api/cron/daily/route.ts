@@ -23,6 +23,14 @@ const ROLLOVER_TIME_BUDGET_MS = 30_000;
 // 通知先を悪用した大量送信による枠の枯渇から、所有者自身の通知を守る
 const MAX_EMAILS_PER_RUN = 50;
 
+// 1通のメールに載せる件数の上限。同じ宛先を指定した多数のアカウントの内容が
+// 1通に集約されても、メール容量・メモリが膨らまないようにする。
+// 載せなかった分はログに記録しないため、請求日前であれば翌日に再度対象になる
+const MAX_ITEMS_PER_EMAIL = 50;
+
+// 宛先アドレスの取得を同時に実行する件数
+const RECIPIENT_LOOKUP_CONCURRENCY = 10;
+
 /**
  * 日次バッチ（design.md 6章）。
  * 1. 繰り越し：期日を過ぎたactiveなサブスクをnext_billing_date >= todayまで進める
@@ -257,17 +265,31 @@ async function sendDueNotifications(admin: AdminClient, today: string) {
   // 送らせる攻撃（複数アカウントのnotify_emailを同じ被害者にする）でも、
   // 1回のバッチで1アドレスにつき1通に抑える
   const recipients = new Map<string, DueNotification[]>();
-  for (const [userId, items] of dueByUser) {
-    try {
-      const email = await resolveNotifyEmail(admin, userId, settingsByUser);
+  const dueEntries = [...dueByUser.entries()];
+  // 宛先の取得（auth.usersの管理API）は1件ずつ待つと件数に比例して遅くなり、
+  // 最初のメールを送る前にタイムアウトしうるため、一定数ずつ並行して解決する
+  for (let i = 0; i < dueEntries.length; i += RECIPIENT_LOOKUP_CONCURRENCY) {
+    const chunk = dueEntries.slice(i, i + RECIPIENT_LOOKUP_CONCURRENCY);
+    const resolved = await Promise.all(
+      chunk.map(async ([userId, items]) => {
+        try {
+          return {
+            email: await resolveNotifyEmail(admin, userId, settingsByUser),
+            items,
+          };
+        } catch (error) {
+          console.error(`[cron/daily] failed to resolve recipient for user ${userId}`, error);
+          return { email: null, items };
+        }
+      }),
+    );
+    for (const { email, items } of resolved) {
       if (!email) continue;
       // ローカル部は大文字小文字を区別する実装があるため保持し、ドメインのみ
       // 小文字化する（Owner@とowner@を同一視すると別人の通知内容が混ざる）
       const at = email.lastIndexOf("@");
       const key = email.slice(0, at + 1) + email.slice(at + 1).toLowerCase();
       recipients.set(key, [...(recipients.get(key) ?? []), ...items]);
-    } catch (error) {
-      console.error(`[cron/daily] failed to resolve recipient for user ${userId}`, error);
     }
   }
 
@@ -286,13 +308,16 @@ async function sendDueNotifications(admin: AdminClient, today: string) {
     .map(({ email, items }) => [email, items] as const);
 
   let emailsSent = 0;
-  for (const [email, items] of ordered) {
+  for (const [email, allItems] of ordered) {
     if (emailsSent >= MAX_EMAILS_PER_RUN) {
       console.error("[cron/daily] email cap reached, deferring the rest");
       break;
     }
     try {
-      const notificationItems: NotificationItem[] = items.map((item) => ({
+      const included = [...allItems]
+        .sort((a, b) => a.daysRemaining - b.daysRemaining)
+        .slice(0, MAX_ITEMS_PER_EMAIL);
+      const notificationItems: NotificationItem[] = included.map((item) => ({
         serviceName: item.subscription.service_name,
         amount: item.subscription.amount,
         billingDate: item.subscription.next_billing_date,
@@ -308,7 +333,7 @@ async function sendDueNotifications(admin: AdminClient, today: string) {
       // design.md 13章: 送信成功時のみ記録する。失敗時は翌日のバッチが
       // 「未送信」として自動的に再送を試みる
       if (sendResult.success) {
-        const logRows = items.flatMap((item) =>
+        const logRows = included.flatMap((item) =>
           item.kinds.map((kind) => ({
             subscription_id: item.subscription.id,
             target_date: item.subscription.next_billing_date,

@@ -82,7 +82,7 @@ function sanitizeText(value: string): string {
 
 // 解約URLはhttp(s)のみ本文に載せる（DB制約が無い過去データへの防御も兼ねる）
 function safeCancelUrl(value: string | null): string | null {
-  return value !== null && /^https?:\/\/\S+$/.test(value) ? value : null;
+  return value !== null && /^https?:\/\/\S+$/i.test(value) ? value : null;
 }
 
 function formatYen(amount: number): string {
