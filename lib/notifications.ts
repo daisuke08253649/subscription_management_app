@@ -73,6 +73,18 @@ export interface NotificationEmailContent {
   text: string;
 }
 
+// 利用者入力（サービス名）は件名・本文にそのまま入るため、改行などの制御文字を
+// 除去し長さを制限する（件名・ヘッダー経由のインジェクションや、複数行に
+// またがる偽の文面の混入を防ぐ）
+function sanitizeText(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ").trim().slice(0, 100);
+}
+
+// 解約URLはhttp(s)のみ本文に載せる（DB制約が無い過去データへの防御も兼ねる）
+function safeCancelUrl(value: string | null): string | null {
+  return value !== null && /^https?:\/\/\S+$/i.test(value) ? value : null;
+}
+
 function formatYen(amount: number): string {
   return `${amount.toLocaleString("ja-JP")}円`;
 }
@@ -97,7 +109,7 @@ export function buildNotificationEmail(
   const daysRemainingValues = new Set(items.map((item) => item.daysRemaining));
   const subject =
     items.length === 1
-      ? `【サブスク】${items[0].daysRemaining}日後に ${items[0].serviceName} ${formatYen(items[0].amount)} の請求があります`
+      ? `【サブスク】${items[0].daysRemaining}日後に ${sanitizeText(items[0].serviceName)} ${formatYen(items[0].amount)} の請求があります`
       : daysRemainingValues.size === 1
         ? `【サブスク】${items[0].daysRemaining}日後に${items.length}件の請求があります（計 ${formatYen(totalAmount)}）`
         : `【サブスク】直近${items.length}件の請求予定があります（計 ${formatYen(totalAmount)}）`;
@@ -107,10 +119,9 @@ export function buildNotificationEmail(
     const trialNote = item.isTrial
       ? "\n  無料トライアルが終了し、この日から課金が始まります"
       : "";
-    const base = `・${item.serviceName}　${formatYen(item.amount)}（${dateLabel} ${formatBillingDate(item.billingDate)}・${item.daysRemaining}日後）${trialNote}`;
-    return item.cancelUrl
-      ? `${base}\n  解約ページ: ${item.cancelUrl}`
-      : base;
+    const base = `・${sanitizeText(item.serviceName)}　${formatYen(item.amount)}（${dateLabel} ${formatBillingDate(item.billingDate)}・${item.daysRemaining}日後）${trialNote}`;
+    const cancelUrl = safeCancelUrl(item.cancelUrl);
+    return cancelUrl ? `${base}\n  解約ページ: ${cancelUrl}` : base;
   });
 
   // design.md 7章: 合計金額はメールに載せない（把握したくなればアプリを開く動線を残す）
@@ -120,6 +131,8 @@ export function buildNotificationEmail(
     ...lines,
     "",
     `アプリで確認する: ${appUrl}`,
+    "",
+    "※このメールに心当たりがない場合は、本文中のリンクを開かずに破棄してください（通知先は、アカウント所有者が設定したアドレスに送信されます）。",
   ].join("\n");
 
   return { subject, text };

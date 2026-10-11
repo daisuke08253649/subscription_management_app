@@ -11,6 +11,17 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchAllRows } from "@/lib/supabase/paginate";
 import type { Tables } from "@/lib/supabase/database.types";
 
+// Vercel Hobbyの関数実行時間の上限内で完了させるための上限
+export const maxDuration = 60;
+
+// 繰り越しに使う時間の上限。超えた分は翌日のバッチが「期日超過」として拾う
+// （異常データ・大量データでバッチ全体が止まり、他ユーザーの通知まで
+// 巻き込まれるのを防ぐ）
+const ROLLOVER_TIME_BUDGET_MS = 30_000;
+
+// 1通のメールに載せる件数の上限（超える分は複数通に分割して全件送る）。
+const MAX_ITEMS_PER_EMAIL = 50;
+
 /**
  * 日次バッチ（design.md 6章）。
  * 1. 繰り越し：期日を過ぎたactiveなサブスクをnext_billing_date >= todayまで進める
@@ -57,6 +68,9 @@ async function rolloverOverdueSubscriptions(
         .select("*")
         .eq("status", "active")
         .lt("next_billing_date", today)
+        // 時間予算で打ち切られた行は更新されずupdated_atが古いまま残るため、
+        // 古い順に処理すれば、処理済みの行が毎回先頭を占めて後ろが取り残されることがない
+        .order("updated_at", { ascending: true })
         .order("id", { ascending: true })
         .range(from, to),
   );
@@ -67,7 +81,12 @@ async function rolloverOverdueSubscriptions(
 
   // サブスク1件ごとにtry/catchし、1件の異常データが他件に影響しないようにする
   // （design.md 13章）
+  const startedAt = Date.now();
   for (const sub of overdue ?? []) {
+    if (Date.now() - startedAt > ROLLOVER_TIME_BUDGET_MS) {
+      console.error("[cron/daily] rollover time budget exceeded, deferring the rest");
+      break;
+    }
     try {
       const result = carryForwardBilling({
         nextBillingDate: sub.next_billing_date,
@@ -224,62 +243,105 @@ async function sendDueNotifications(admin: AdminClient, today: string) {
     return;
   }
 
+  // 宛先アドレスごとに集約する。通知先を悪用して同じアドレスへ多数のメールを
+  // 送らせる攻撃（複数アカウントのnotify_emailを同じ被害者にする）でも、
+  // 1回のバッチで1アドレスにつき1通に抑える
+  const recipients = new Map<string, DueNotification[]>();
+  // 通知先を明示していない利用者のauth.users.emailは、利用者ごとに問い合わせず
+  // 管理APIの一覧取得（1回で最大1000件）でまとめて取得する。利用者数に比例した
+  // 待ち時間で、最初のメールを送る前にタイムアウトするのを防ぐ
+  const needAuthEmail = new Set(
+    [...dueByUser.keys()].filter(
+      (userId) => !settingsByUser.get(userId)?.notify_email,
+    ),
+  );
+  const authEmails = await loadAuthEmails(admin, needAuthEmail);
+
   for (const [userId, items] of dueByUser) {
-    try {
-      const email = await resolveNotifyEmail(admin, userId, settingsByUser);
-      if (!email) continue;
+    const email =
+      settingsByUser.get(userId)?.notify_email || authEmails.get(userId);
+    if (!email) {
+      console.error(`[cron/daily] could not resolve email for user ${userId}`);
+      continue;
+    }
+    // ローカル部は大文字小文字を区別する実装があるため保持し、ドメインのみ
+    // 小文字化する（Owner@とowner@を同一視すると別人の通知内容が混ざる）
+    const at = email.lastIndexOf("@");
+    const key = email.slice(0, at + 1) + email.slice(at + 1).toLowerCase();
+    recipients.set(key, [...(recipients.get(key) ?? []), ...items]);
+  }
 
-      const notificationItems: NotificationItem[] = items.map((item) => ({
-        serviceName: item.subscription.service_name,
-        amount: item.subscription.amount,
-        billingDate: item.subscription.next_billing_date,
-        daysRemaining: item.daysRemaining,
-        cancelUrl: item.subscription.cancel_url,
-        isTrial: item.subscription.is_trial,
-      }));
+  // 送信数に上限は設けない。通知の件数に上限が無いこと(F-4)を優先する。
+  // 上限を設けると、超えた宛先の通知が、翌日の繰り越しでtarget_dateが進むため
+  // 再送されず失われる。通知先の悪用への対策は、宛先ごとの集約・本文の無害化・
+  // DB制約と、サインアップの無効化（運用）で行う（Issue #18）
+  for (const [email, allItems] of recipients) {
+    // 1通あたりMAX_ITEMS_PER_EMAIL件までに分割して送る。1通に詰めすぎると
+    // メール容量・メモリが膨らむが、切り捨てると請求日当日の通知が翌日の繰り越しで
+    // 失われるため、請求日の近い順に複数通へ分けて全件送る（F-4）
+    const sorted = [...allItems].sort((a, b) => a.daysRemaining - b.daysRemaining);
+    for (let i = 0; i < sorted.length; i += MAX_ITEMS_PER_EMAIL) {
+      const included = sorted.slice(i, i + MAX_ITEMS_PER_EMAIL);
+      try {
+        const notificationItems: NotificationItem[] = included.map((item) => ({
+          serviceName: item.subscription.service_name,
+          amount: item.subscription.amount,
+          billingDate: item.subscription.next_billing_date,
+          daysRemaining: item.daysRemaining,
+          cancelUrl: item.subscription.cancel_url,
+          isTrial: item.subscription.is_trial,
+        }));
 
-      const content = buildNotificationEmail(notificationItems, appUrl);
-      const sendResult = await sendNotificationEmail(email, content);
+        const content = buildNotificationEmail(notificationItems, appUrl);
+        const sendResult = await sendNotificationEmail(email, content);
 
-      // design.md 13章: 送信成功時のみ記録する。失敗時は翌日のバッチが
-      // 「未送信」として自動的に再送を試みる
-      if (sendResult.success) {
-        const logRows = items.flatMap((item) =>
-          item.kinds.map((kind) => ({
-            subscription_id: item.subscription.id,
-            target_date: item.subscription.next_billing_date,
-            kind,
-          })),
-        );
-        const { error: logError } = await admin
-          .from("notification_logs")
-          .insert(logRows);
-        if (logError) {
-          console.error(
-            `[cron/daily] failed to record notification_logs for user ${userId}`,
-            logError,
+        // design.md 13章: 送信成功時のみ記録する。失敗時は翌日のバッチが
+        // 「未送信」として自動的に再送を試みる
+        if (sendResult.success) {
+          const logRows = included.flatMap((item) =>
+            item.kinds.map((kind) => ({
+              subscription_id: item.subscription.id,
+              target_date: item.subscription.next_billing_date,
+              kind,
+            })),
           );
+          const { error: logError } = await admin
+            .from("notification_logs")
+            .insert(logRows);
+          if (logError) {
+            console.error(
+              "[cron/daily] failed to record notification_logs",
+              logError,
+            );
+          }
         }
+      } catch (error) {
+        console.error("[cron/daily] notification failed", error);
       }
-    } catch (error) {
-      console.error(`[cron/daily] notification failed for user ${userId}`, error);
     }
   }
 }
 
-async function resolveNotifyEmail(
+// design.md 3章: 通知先メールの既定はauth.users.email。
+// 必要な利用者が全員見つかるか、最後のページに達するまで一覧取得する
+async function loadAuthEmails(
   admin: AdminClient,
-  userId: string,
-  settingsByUser: Map<string, Tables<"settings">>,
-): Promise<string | null> {
-  const notifyEmail = settingsByUser.get(userId)?.notify_email;
-  if (notifyEmail) return notifyEmail;
+  userIds: Set<string>,
+): Promise<Map<string, string>> {
+  const found = new Map<string, string>();
+  if (userIds.size === 0) return found;
 
-  // design.md 3章: 通知先メールの既定はauth.users.email
-  const { data, error } = await admin.auth.admin.getUserById(userId);
-  if (error || !data.user?.email) {
-    console.error(`[cron/daily] could not resolve email for user ${userId}`, error);
-    return null;
+  const perPage = 1000;
+  for (let page = 1; ; page++) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
+    if (error) {
+      console.error("[cron/daily] failed to list auth users", error);
+      break;
+    }
+    for (const user of data.users) {
+      if (user.email && userIds.has(user.id)) found.set(user.id, user.email);
+    }
+    if (found.size >= userIds.size || data.users.length < perPage) break;
   }
-  return data.user.email;
+  return found;
 }

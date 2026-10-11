@@ -38,6 +38,7 @@ const cycleSchema = z.enum(["monthly", "yearly", "weekly", "custom_days"], {
 
 const cancelUrlSchema = z
   .url({ error: "URLの形式が正しくありません" })
+  .max(2048, { error: "URLは2048文字以内で入力してください" })
   .refine(
     (val) => val.startsWith("http://") || val.startsWith("https://"),
     { message: "http://またはhttps://で始まるURLを入力してください" },
@@ -132,8 +133,16 @@ function toSubscriptionError(error: { code?: string; message: string }) {
     // かつ変更後の値が過去日だった場合
     return "次回請求日は今日以降の日付を入力してください";
   }
+  if (error.code === "P0006") {
+    // 次回請求日がDBの許容範囲（約1日前〜約11年先）外
+    return "次回請求日の範囲が正しくありません";
+  }
+  if (error.code === "P0007") {
+    // ユーザーあたりの件数上限（サブスク500件・カード100件）
+    return "登録できる件数の上限に達しています";
+  }
   if (
-    error.code === "P0001" || // 他ユーザーのcard_idを指すトリガー違反
+    error.code === "P0001" || // 他ユーザーのカード指定のトリガー違反
     error.code === "P0002" || // RPC内のSTRICT INTOで対象が見つからない（RLSによる非表示含む）
     error.code === "PGRST116" || // RLSで対象が見えない（直接テーブル呼び出し時）
     error.code === "42501" // RLSのWITH CHECKによる直接の拒否
