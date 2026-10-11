@@ -111,9 +111,9 @@ export function SubscriptionList({
               {sub.cards ? `・${sub.cards.name}` : ""}
             </p>
           </div>
-          <div className="flex shrink-0 items-center gap-4">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
             <p className="tabular-nums">{formatYen(sub.amount)}</p>
-            <div className="flex gap-1">
+            <div className="flex flex-wrap gap-1">
               {isHttpUrl(sub.cancel_url) ? (
                 <Button asChild variant="ghost" size="sm">
                   <a href={sub.cancel_url} target="_blank" rel="noopener noreferrer">
