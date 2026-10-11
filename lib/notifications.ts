@@ -59,6 +59,8 @@ export interface NotificationItem {
    * バッチの追いつき時にkindと実際の残り日数がずれることがあるため */
   daysRemaining: number;
   cancelUrl: string | null;
+  /** 無料トライアル中。次回請求日が課金開始日になる（F-6） */
+  isTrial: boolean;
 }
 
 function formatBillingDate(dateStr: string): string {
@@ -101,7 +103,11 @@ export function buildNotificationEmail(
         : `【サブスク】直近${items.length}件の請求予定があります（計 ${formatYen(totalAmount)}）`;
 
   const lines = items.map((item) => {
-    const base = `・${item.serviceName}　${formatYen(item.amount)}（${formatBillingDate(item.billingDate)}・${item.daysRemaining}日後）`;
+    const dateLabel = item.isTrial ? "課金開始" : "請求";
+    const trialNote = item.isTrial
+      ? "\n  無料トライアルが終了し、この日から課金が始まります"
+      : "";
+    const base = `・${item.serviceName}　${formatYen(item.amount)}（${dateLabel} ${formatBillingDate(item.billingDate)}・${item.daysRemaining}日後）${trialNote}`;
     return item.cancelUrl
       ? `${base}\n  解約ページ: ${item.cancelUrl}`
       : base;
@@ -109,7 +115,7 @@ export function buildNotificationEmail(
 
   // design.md 7章: 合計金額はメールに載せない（把握したくなればアプリを開く動線を残す）
   const text = [
-    "以下のサブスクの請求が近づいています。",
+    "以下のサブスクの請求（課金開始を含む）が近づいています。",
     "",
     ...lines,
     "",

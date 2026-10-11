@@ -235,6 +235,7 @@ async function sendDueNotifications(admin: AdminClient, today: string) {
         billingDate: item.subscription.next_billing_date,
         daysRemaining: item.daysRemaining,
         cancelUrl: item.subscription.cancel_url,
+        isTrial: item.subscription.is_trial,
       }));
 
       const content = buildNotificationEmail(notificationItems, appUrl);

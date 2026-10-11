@@ -17,6 +17,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import {
   NativeSelect,
@@ -165,6 +166,28 @@ export function SubscriptionFormModal({
           <div className="flex flex-col gap-2">
             <Label>支払いに使っているカード</Label>
             <CardSelect cards={cards} defaultValue={subscription?.card_id} />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="is_trial"
+              name="is_trial"
+              defaultChecked={subscription?.is_trial}
+            />
+            <Label htmlFor="is_trial" className="font-normal">
+              無料トライアル中（次回請求日が課金開始日）
+            </Label>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="cancel_url">解約ページのURL（任意）</Label>
+            <Input
+              id="cancel_url"
+              name="cancel_url"
+              type="url"
+              placeholder="https://"
+              defaultValue={subscription?.cancel_url ?? undefined}
+            />
           </div>
 
           <div className="flex flex-col gap-2">
