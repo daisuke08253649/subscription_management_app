@@ -258,7 +258,7 @@
 - Vercel Productionへのデプロイ、環境変数の最終確認（特に`SUPABASE_SERVICE_ROLE_KEY`・`CRON_SECRET`に`NEXT_PUBLIC_`が付いていないこと）
 - 契約中の実際のサブスクを全件手入力で登録（要件定義書9章の判断基準1、初回30分程度の想定）
 - Supabase本番のAuth設定（Dashboardでの手作業。セキュリティ検証Issue #19）:
-  - 所有者のアカウント作成後に**サインアップを無効化**（Authentication > Providers > Email > Allow new users to sign up をオフ）。無効化しない場合は「Confirm email」を必須にする
+  - 所有者のアカウント作成後に**サインアップを無効化**（Authentication > Providers > Email > Allow new users to sign up をオフ）。合わせてVercelの環境変数に `SIGNUP_ENABLED=false` を設定する（ログイン画面の「新規登録」リンクを消し、`/auth/signup` をログインへリダイレクトする）。無効化しない場合は「Confirm email」を必須にする
   - パスワード要件を`supabase/config.toml`と揃える（最小8文字・大小英字＋数字）、漏洩パスワード検出を有効化
   - Auth・メール送信のレート制限が有効であることを確認
 

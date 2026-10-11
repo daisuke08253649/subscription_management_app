@@ -300,6 +300,7 @@ components/
 | `RESEND_API_KEY` | 通知メール送信 | サーバーのみ |
 | `RESEND_FROM_EMAIL` | メール送信元アドレス。Resend側で検証済みのアドレス／ドメインを使う | サーバーのみ |
 | `CRON_SECRET` | `/api/cron/daily`の認証（§5）。Vercelが自動でヘッダー送信 | サーバーのみ |
+| `SIGNUP_ENABLED` | 新規登録の画面導線・`/auth/signup`・Server Actionの有効/無効。`false`のときのみ無効（未設定は有効）。本番でSupabaseのサインアップを無効化したら合わせて`false`にする | サーバーのみ |
 | `APP_URL` | 通知メール本文のアプリ・解約ページへのリンク生成に使用する絶対URL | サーバーのみ |
 
 `SUPABASE_SERVICE_ROLE_KEY`と`CRON_SECRET`は特に、Vercelの環境変数設定でProduction環境にのみ登録し、誤ってクライアントバンドルに含めないよう変数名に`NEXT_PUBLIC_`を付けないことを徹底する。
