@@ -56,6 +56,15 @@ export async function GET(request: Request) {
   }
 }
 
+// 文字列から決定的な数値を作る簡易ハッシュ（暗号用途ではない）
+function dailyOrderKey(value: string): number {
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) {
+    hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
+  }
+  return hash;
+}
+
 type AdminClient = ReturnType<typeof createAdminClient>;
 
 async function rolloverOverdueSubscriptions(
@@ -252,7 +261,10 @@ async function sendDueNotifications(admin: AdminClient, today: string) {
     try {
       const email = await resolveNotifyEmail(admin, userId, settingsByUser);
       if (!email) continue;
-      const key = email.toLowerCase();
+      // ローカル部は大文字小文字を区別する実装があるため保持し、ドメインのみ
+      // 小文字化する（Owner@とowner@を同一視すると別人の通知内容が混ざる）
+      const at = email.lastIndexOf("@");
+      const key = email.slice(0, at + 1) + email.slice(at + 1).toLowerCase();
       recipients.set(key, [...(recipients.get(key) ?? []), ...items]);
     } catch (error) {
       console.error(`[cron/daily] failed to resolve recipient for user ${userId}`, error);
@@ -261,11 +273,17 @@ async function sendDueNotifications(admin: AdminClient, today: string) {
 
   // 上限に達しても、請求日が近いものから先に送る（固定順で後ろの利用者が
   // 毎日取り残されることがないよう、緊急度の高い順に処理する）
-  const ordered = [...recipients.entries()].sort(
-    ([, a], [, b]) =>
-      Math.min(...a.map((i) => i.daysRemaining)) -
-      Math.min(...b.map((i) => i.daysRemaining)),
-  );
+  // 同じ緊急度の中では、日付をシードにした順序で並べて毎日入れ替える
+  // （固定順だと、同順位の多数の宛先のうち同じ人だけが毎日先に送られ続ける）
+  const ordered = [...recipients.entries()]
+    .map(([email, items]) => ({
+      email,
+      items,
+      urgency: Math.min(...items.map((i) => i.daysRemaining)),
+      tieBreak: dailyOrderKey(`${today}:${email}`),
+    }))
+    .sort((a, b) => a.urgency - b.urgency || a.tieBreak - b.tieBreak)
+    .map(({ email, items }) => [email, items] as const);
 
   let emailsSent = 0;
   for (const [email, items] of ordered) {

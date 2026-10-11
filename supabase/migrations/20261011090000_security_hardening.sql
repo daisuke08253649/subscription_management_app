@@ -56,13 +56,20 @@ declare
   v_total integer;
   v_active integer;
 begin
+  -- 解約済み→アクティブへの変更（REST直叩きのUPDATE）でも上限を回避できないよう検証する。
+  -- それ以外のUPDATE（アクティブのままの編集など）は件数が増えないため対象外
+  if tg_op = 'UPDATE' and not (old.status <> 'active' and new.status = 'active') then
+    return new;
+  end if;
+
   perform pg_advisory_xact_lock(hashtextextended(tg_table_name || ':' || new.user_id::text, 0));
 
   if tg_table_name = 'subscriptions' then
     select count(*), count(*) filter (where status = 'active')
       into v_total, v_active
       from public.subscriptions where user_id = new.user_id;
-    if v_total >= v_total_limit
+    -- UPDATE（再有効化）では行自身が総数に含まれるため、総数の上限判定はINSERTのみ
+    if (tg_op = 'INSERT' and v_total >= v_total_limit)
        or (new.status = 'active' and v_active >= v_limit) then
       raise exception 'row limit exceeded for subscriptions' using errcode = 'P0007';
     end if;
@@ -78,7 +85,7 @@ end;
 $$;
 
 create trigger subscriptions_row_limit
-  before insert on public.subscriptions
+  before insert or update of status on public.subscriptions
   for each row execute procedure public.check_row_limit_per_user(500, 2000);
 
 create trigger cards_row_limit
