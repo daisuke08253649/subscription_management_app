@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { startTransition, useActionState, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   createSubscription,
@@ -80,7 +80,19 @@ export function SubscriptionFormModal({
         <DialogHeader>
           <DialogTitle>{isEdit ? "サブスクを編集" : "サブスクを登録"}</DialogTitle>
         </DialogHeader>
-        <form action={formAction} className="flex flex-col gap-4">
+        {/* <form action={...}>だと、React 19はアクション完了後に非制御の入力欄を
+            初期値へ戻すため、バリデーションエラーで入力内容が全て消えてしまう
+            （請求周期・トライアル・カード選択も初期値に戻る）。
+            onSubmitで自前に呼び出せば自動リセットは起きない。成功時はモーダルを
+            閉じて再マウントされるため、リセットは不要 */}
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            const formData = new FormData(event.currentTarget);
+            startTransition(() => formAction(formData));
+          }}
+          className="flex flex-col gap-4"
+        >
           {isEdit ? (
             <>
               <input type="hidden" name="id" value={subscription.id} />
